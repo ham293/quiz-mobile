@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# Capacitor 生成的安卓工程（由 CI / 本地 `npx cap add android` 生成，不入库）
+android/
+ios/
+
+# vendor 由 `npm run vendor` 从 node_modules 拷贝生成
+web/vendor/
+
+# 构建产物
+dist/
+out/
+*.apk
+*.aab
+*.zip
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log
+
+# Python 小工具缓存
+__pycache__/
+*.pyc

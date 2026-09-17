@@ -1,0 +1,12 @@
+{
+  "appId": "com.ham293.quizmobile",
+  "appName": "刷题助手",
+  "webDir": "web",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

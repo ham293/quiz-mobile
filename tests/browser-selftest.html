@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>浏览器自测</title>
+  <link rel="stylesheet" href="../web/css/app.css" />
+  <style>
+    #selftest { position: fixed; inset: 0; z-index: 999; background: #fff; color: #111; overflow: auto;
+      font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; padding: 8px; }
+    #selftest.hidden { display: none; }
+  </style>
+</head>
+<body>
+  <!-- 与 web/index.html 相同的应用外壳（app.js 依赖这些 id） -->
+  <header id="topbar">
+    <button id="btn-back" class="icon-btn hidden" type="button">←</button>
+    <h1 id="title">刷题助手</h1>
+    <button id="btn-action" class="icon-btn hidden" type="button">⋯</button>
+  </header>
+  <main id="screen" class="screen"></main>
+  <nav id="tabbar">
+    <button class="tab active" data-screen="banks" type="button"><span>📚</span>题库</button>
+    <button class="tab" data-screen="practice" type="button"><span>✍️</span>练习</button>
+    <button class="tab" data-screen="wrong" type="button"><span>❌</span>错题</button>
+    <button class="tab" data-screen="stats" type="button"><span>📊</span>统计</button>
+    <button class="tab" data-screen="settings" type="button"><span>⚙️</span>设置</button>
+  </nav>
+  <div id="toast" class="toast hidden"></div>
+  <div id="sheet" class="sheet-mask hidden"><div class="sheet" id="sheet-body"></div></div>
+  <div id="loading" class="loading hidden"><div class="spinner"></div><div id="loading-text">处理中…</div></div>
+  <input id="file-input" type="file" class="hidden" />
+
+  <script defer src="../web/vendor/mammoth.browser.min.js"></script>
+  <script defer src="../web/vendor/jspdf.umd.min.js"></script>
+  <script defer src="../web/vendor/html2canvas.min.js"></script>
+
+  <pre id="selftest">自测运行中…</pre>
+
+  <script type="module">
+    const log = [];
+    const errors = [];
+    window.addEventListener('error', (e) => errors.push('window.error: ' + e.message));
+    window.addEventListener('unhandledrejection', (e) => errors.push('unhandled: ' + (e.reason && e.reason.message ? e.reason.message : e.reason)));
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const check = (name, cond, detail = '') => log.push(`${cond ? 'PASS' : 'FAIL'}  ${name}${detail ? '  :: ' + detail : ''}`);
+    const out = document.getElementById('selftest');
+    const flush = () => { out.textContent = log.join('\n') + '\n---- errors ----\n' + (errors.join('\n') || '（无）') + '\n---- END ----'; };
+
+    try {
+      const repo = await import('../web/js/bank.js');
+      const db = await import('../web/js/db.js');
+      const { extractLines } = await import('../web/js/extract.js');
+      const { parseLines } = await import('../web/js/parser-text.js');
+      const app = await import('../web/js/app.js');
+      const stats = await import('../web/js/stats.js');
+      const P = await import('../web/js/practice.js');
+      const eb = await import('../web/js/ebbinghaus.js');
+
+      // app.js 的 boot() 在 DOMContentLoaded 里跑；而模块脚本本身会推迟 DOMContentLoaded，
+      // 所以这里主动等页面被渲染出内容（最多 3 秒），顺便真实触发一次启动流程。
+      document.dispatchEvent(new Event('DOMContentLoaded'));
+      for (let i = 0; i < 30 && !document.querySelector('#screen').textContent.trim(); i++) await sleep(100);
+      check('应用已启动并且题库页渲染', !!document.querySelector('#screen .empty, #screen .card'),
+        document.getElementById('screen').textContent.trim().slice(0, 30));
+
+      /* 1. 真实解析 docx（浏览器路径：mammoth 浏览器构建） */
+      const resp = await fetch('../tests/fixtures/sample-questions.docx');
+      check('fixture 可下载', resp.ok, String(resp.status));
+      const blob = await resp.blob();
+      const file = new File([blob], 'sample-questions.docx', {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      const { lines, kind } = await extractLines(file);
+      check('extract.js 识别 docx 并提取行', kind === 'docx' && lines.length === 68, `${kind} / ${lines.length} 行`);
+
+      const parsed = parseLines(lines, '浏览器测试题库');
+      check('parser-text 解析出 14 题', parsed.questions.length === 14, `${parsed.questions.length} 题`);
+      check('解析日志与跳过行都有内容', parsed.errors.length === 1 && parsed.skipped.length >= 5,
+        `errors=${parsed.errors.length} skipped=${parsed.skipped.length}`);
+
+      /* 2. 入库并载入 */
+      await repo.importParsed('浏览器测试题库', parsed, { fileName: 'sample-questions.docx', fileType: 'docx' });
+      await app.loadBank('浏览器测试题库');
+      check('题库载入到全局状态', app.state.bank && app.state.bank.questions.length === 14);
+
+      /* 3. 练习会话：答 3 题（含故意答错） */
+      const questions = P.pickQuestions({ bank: app.state.bank, mode: 'order' }).slice(0, 3);
+      app.state.questions = questions;
+      app.state.index = 0;
+      app.state.wrongRecords = [];
+      app.state.currentMode = 'order';
+      app.state.session = stats.newSession('顺序练习', '浏览器测试题库');
+      await app.navigate('session');
+      check('练习页渲染出题干', !!document.querySelector('#screen .q-stem'));
+      check('练习页渲染出选项', document.querySelectorAll('#screen .option').length >= 2);
+
+      // 第一题：点第一个选项（可能对也可能错），验证反馈出现
+      document.querySelector('#screen .option').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      await sleep(120);
+      check('作答后出现对错反馈', !!document.querySelector('#screen .feedback'),
+        document.querySelector('#screen .feedback') ? document.querySelector('#screen .feedback').textContent.slice(0, 12) : '');
+      check('作答后出现「下一题」按钮', /下一题/.test(document.querySelector('#screen .bottom-actions').textContent));
+
+      // 第二题：简答/多选题也要能走通 —— 直接用模块判定，避免依赖题型顺序
+      const q1 = questions[0];
+      const judged = P.judge(q1, q1.qtype === '判断' ? '正确' : (q1.answer || 'A'));
+      check('judge() 能判定正确答案', judged.ok === true, JSON.stringify(judged));
+
+      /* 4. 错题本/收藏本/统计/设置/日志/补录/关于 全部渲染一遍 */
+      await repo.recordPracticeResult('浏览器测试题库', questions[0], false);
+      await repo.toggleFavorite('浏览器测试题库', questions[1]);
+      const routes = [
+        ['banks', '题库页'], ['practice', '练习首页'], ['wrong', '错题本'], ['favorites', '收藏本'],
+        ['stats', '统计页'], ['settings', '设置页'], ['logs', '解析日志'], ['manual', '手动补录'], ['about', '关于'],
+      ];
+      for (const [screen, label] of routes) {
+        const before = errors.length;
+        await app.navigate(screen, {}, { push: false });
+        await sleep(60);
+        const html = document.getElementById('screen').textContent.trim();
+        check(`${label} 渲染有内容且无异常`, html.length > 0 && errors.length === before, `${html.length} 字符`);
+      }
+
+      /* 5. 练习报告页 */
+      app.state.index = 99;
+      await app.navigate('session', {}, { push: false });
+      await sleep(80);
+      check('练习结束自动跳到报告页', !!(app.state.report));
+      if (app.state.report) {
+        check('报告含答题数/正确率', typeof app.state.report.answered === 'number' && typeof app.state.report.accuracy === 'number',
+          `答 ${app.state.report.answered} 题，正确率 ${app.state.report.accuracy}%`);
+      }
+
+      /* 6. 导出 PDF（真实调用 html2canvas + jsPDF） */
+      try {
+        const exporter = await import('../web/js/exporter.js');
+        const okRl = typeof globalThis.jspdf !== 'undefined' && typeof globalThis.html2canvas !== 'undefined';
+        check('jspdf / html2canvas 已加载', okRl, `jspdf=${typeof globalThis.jspdf}, html2canvas=${typeof globalThis.html2canvas}`);
+        const records = await repo.loadWrong('浏览器测试题库');
+        const res = await exporter.exportPdf(records, {
+          title: '《浏览器测试题库》错题本', wrongInfo: true, fileName: 'selftest.pdf',
+        });
+        check('导出 PDF 成功', res && res.blob && res.blob.size > 1000, `${res && res.blob ? res.blob.size : 0} 字节 / ${res && res.pages} 页`);
+      } catch (e) {
+        check('导出 PDF 成功', false, String(e && e.message));
+      }
+
+      /* 7. 数据落盘检查 */
+      const banks = await repo.listBanks();
+      check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
+      check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);
+      check('收藏本有记录', (await repo.favoriteTotal('浏览器测试题库')) >= 1);
+      check('艾宾浩斯：错题当天到期', eb.dueCount(await repo.loadWrong('浏览器测试题库')) >= 1);
+    } catch (err) {
+      log.push('FAIL  自测脚本异常 :: ' + (err && err.stack ? err.stack : err));
+    }
+
+    flush();
+    window.__selftestDone = true;
+    document.title = log.some((l) => l.startsWith('FAIL')) || errors.length ? 'SELFTEST-HAS-FAILURES' : 'SELFTEST-OK';
+
+    // 把结果回传给本地自测服务器（tests/result_server.py）
+    try {
+      const payload = JSON.stringify({
+        title: document.title,
+        passed: log.filter((l) => l.startsWith('PASS')).length,
+        failed: log.filter((l) => l.startsWith('FAIL')).length,
+        errors,
+        log,
+      }, null, 2);
+      await fetch('/__result', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload });
+    } catch (e) {
+      // 服务器不存在时忽略
+    }
+  </script>
+</body>
+</html>

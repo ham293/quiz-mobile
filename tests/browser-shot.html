@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>界面截图</title>
+  <link rel="stylesheet" href="../web/css/app.css" />
+</head>
+<body>
+  <header id="topbar">
+    <button id="btn-back" class="icon-btn hidden" type="button">←</button>
+    <h1 id="title">刷题助手</h1>
+    <button id="btn-action" class="icon-btn hidden" type="button">⋯</button>
+  </header>
+  <main id="screen" class="screen"></main>
+  <nav id="tabbar">
+    <button class="tab active" data-screen="banks" type="button"><span>📚</span>题库</button>
+    <button class="tab" data-screen="practice" type="button"><span>✍️</span>练习</button>
+    <button class="tab" data-screen="wrong" type="button"><span>❌</span>错题</button>
+    <button class="tab" data-screen="stats" type="button"><span>📊</span>统计</button>
+    <button class="tab" data-screen="settings" type="button"><span>⚙️</span>设置</button>
+  </nav>
+  <div id="toast" class="toast hidden"></div>
+  <div id="sheet" class="sheet-mask hidden"><div class="sheet" id="sheet-body"></div></div>
+  <div id="loading" class="loading hidden"><div class="spinner"></div><div id="loading-text">处理中…</div></div>
+  <input id="file-input" type="file" class="hidden" />
+
+  <script defer src="../web/vendor/mammoth.browser.min.js"></script>
+  <script defer src="../web/vendor/jspdf.umd.min.js"></script>
+  <script defer src="../web/vendor/html2canvas.min.js"></script>
+
+  <!-- 截图辅助页：?screen=xxx 渲染指定页面，?seed=1 先灌入演示数据（不参与打包） -->
+  <script type="module">
+    const params = new URLSearchParams(location.search);
+    const target = params.get('screen') || 'banks';
+    const name = '演示题库';
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const report = async (payload) => {
+      try {
+        await fetch('/__result', { method: 'POST', body: JSON.stringify(payload) });
+      } catch { /* 忽略 */ }
+    };
+
+    try {
+    const repo = await import('../web/js/bank.js');
+    const db = await import('../web/js/db.js');
+    const { extractLines } = await import('../web/js/extract.js');
+    const { parseLines } = await import('../web/js/parser-text.js');
+    const app = await import('../web/js/app.js');
+    const stats = await import('../web/js/stats.js');
+    const P = await import('../web/js/practice.js');
+
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    await sleep(200);
+
+    if (params.get('seed') === '1' && !(await repo.getBank(name))) {
+      const blob = await (await fetch('../tests/fixtures/sample-questions.docx')).blob();
+      const file = new File([blob], 'sample-questions.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      const { lines } = await extractLines(file);
+      const parsed = parseLines(lines, name);
+      await repo.importParsed(name, parsed, { fileName: '示例题库_脏数据.docx', fileType: 'docx' });
+      const bank = await repo.getBank(name);
+      await repo.recordPracticeResult(name, bank.questions[0], false);
+      await repo.recordPracticeResult(name, bank.questions[1], false);
+      await repo.recordPracticeResult(name, bank.questions[1], false);
+      await repo.toggleFavorite(name, bank.questions[2]);
+      await repo.toggleFavorite(name, bank.questions[5]);
+      // 造一点统计数据
+      const s1 = stats.newSession('顺序练习', name);
+      const list = P.pickQuestions({ bank, mode: 'order' });
+      list.slice(0, 10).forEach((q, i) => stats.recordAnswer(s1, q, i % 4 !== 0, 'A'));
+      stats.finishSession(s1);
+      const lib = await repo.loadStats(name);
+      stats.mergeIntoLibrary(lib, s1);
+      const s2 = stats.newSession('错题重练', name);
+      list.slice(0, 5).forEach((q, i) => stats.recordAnswer(s2, q, i % 3 !== 0, 'B'));
+      stats.finishSession(s2);
+      stats.mergeIntoLibrary(lib, s2);
+      await repo.saveStats(name, lib);
+    }
+
+    await app.loadBank(name);
+
+    if (target === 'session') {
+      app.state.questions = P.pickQuestions({ bank: app.state.bank, mode: 'order' });
+      app.state.index = Number(params.get('q') || 2);
+      app.state.wrongRecords = await repo.loadWrong(name);
+      app.state.currentMode = 'order';
+      app.state.session = stats.newSession('顺序练习', name);
+      app.state.session.answered = 2;
+      app.state.session.correct = 1;
+    }
+    if (target === 'report') {
+      const list = P.pickQuestions({ bank: app.state.bank, mode: 'order' }).slice(0, 8);
+      const session = stats.newSession('错题重练', name);
+      session.wrongBookTotal = 2;
+      list.forEach((q, i) => stats.recordAnswer(session, q, i % 3 !== 0, i % 3 ? 'A' : 'B'));
+      stats.finishSession(session);
+      app.state.report = stats.summarize(session);
+    }
+
+    await app.navigate(target, {}, { push: false });
+    await sleep(300);
+    await report({ screen: target, ok: true, chars: document.getElementById('screen').textContent.trim().length });
+    } catch (err) {
+      document.getElementById('screen').textContent = '截图页异常：' + (err && err.message ? err.message : err);
+      await report({ screen: target, ok: false, error: String(err && err.stack ? err.stack : err) });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+name: 构建 APK
+
+# 触发方式：
+#   1. 手动：仓库页面 Actions → 构建 APK → Run workflow
+#   2. 推送代码到 main/master 自动构建
+#   3. 打 tag（如 v1.0.0）会把 APK 自动发布到 Releases，手机浏览器直接下载安装
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 构建 Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: 准备 Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 npm 依赖
+        run: npm ci
+
+      - name: 拷贝离线依赖到 web/vendor
+        run: node scripts/copy-vendor.mjs
+
+      - name: 运行单元测试
+        run: npm test
+
+      - name: 生成安卓工程
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+          npx cap sync android
+
+      - name: 注入稳定签名配置
+        run: node scripts/patch-android.mjs
+
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 构建 APK
+        id: build
+        continue-on-error: true
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug assembleRelease --no-daemon
+
+      # 万一自签名密钥库不被接受，回退到 Android 默认 debug 签名，保证仍能拿到 APK
+      - name: 回退构建（默认签名）
+        if: steps.build.outcome == 'failure'
+        run: |
+          node scripts/patch-android.mjs --revert
+          cd android
+          chmod +x gradlew
+          ./gradlew clean assembleDebug --no-daemon
+
+      - name: 收集 APK
+        run: |
+          mkdir -p out
+          find android/app/build/outputs/apk -name '*.apk' -exec cp {} out/ \;
+          ls -lh out/
+
+      - name: 上传 APK（Artifacts）
+        uses: actions/upload-artifact@v4
+        with:
+          name: 刷题助手-APK
+          path: out/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: 发布到 Releases（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
+          body: |
+            手机安装说明：
+            1. 在手机浏览器打开本页面，下载 `app-release.apk`（或 `app-debug.apk`）
+            2. 点击安装，若提示"未知来源"，请在系统设置里允许本浏览器/文件管理器安装应用
+            3. 应用完全离线运行，题库数据保存在手机本地
