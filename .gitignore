@@ -25,3 +25,8 @@ Thumbs.db
 # Python 小工具缓存
 __pycache__/
 *.pyc
+
+# 浏览器自测 / 截图产生的临时产物
+tests/browser-result.json
+tests/browser-result.html
+tests/shots/

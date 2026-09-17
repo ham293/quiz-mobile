@@ -854,6 +854,29 @@ export async function renderAbout(root, params = {}) {
     }),
   ]);
 
+  // 诊断信息：出问题时让用户能把这段直接发出来，省去来回猜
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '（未知环境）';
+  const diagText = `App v${APP_VERSION}\nUA: ${ua}`;
+  const diagCard = el('div.card', {}, [
+    el('h3.card-title', { text: '诊断信息' }),
+    el('p.card-sub', {
+      text: '遇到「导入失败 / 解析异常」时，把下面这段连同屏幕上的报错文字一起发出来，就能快速定位。',
+    }),
+    el('div.mono.pre-wrap.mt8', { text: diagText }),
+    el('button.btn.sm.mt12', {
+      type: 'button',
+      text: '复制诊断信息',
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(diagText);
+          toast('诊断信息已复制');
+        } catch {
+          toast('复制失败，请长按上面的文字手动选择');
+        }
+      },
+    }),
+  ]);
+
   mount(
     root,
     el('div.card', {}, [
@@ -866,6 +889,7 @@ export async function renderAbout(root, params = {}) {
     ]),
     introCard,
     dataCard,
+    diagCard,
     dangerCard,
   );
 }

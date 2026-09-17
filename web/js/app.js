@@ -250,6 +250,45 @@ export function startSession(questions, mode) {
   return state.questions;
 }
 
+/**
+ * 导入内置的示例题库（docx + pdf 各一份）。
+ * 用途：出问题时先用它验证「解析链路是否正常」——
+ *   示例题库能进来 → 说明程序没问题，是选中的文件格式特殊；
+ *   示例题库也进不来 → 说明是这台手机的 WebView 兼容性问题。
+ * @returns {Promise<string>} 结果摘要
+ */
+export async function importSamples() {
+  const samples = [
+    { path: '../samples/示例题库.docx', name: '示例题库.docx' },
+    { path: '../samples/示例题库.pdf', name: '示例题库.pdf' },
+  ];
+  const results = [];
+  loading('正在导入示例题库…');
+  try {
+    for (const item of samples) {
+      const url = new URL(item.path, import.meta.url).href;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          results.push(`${item.name}：读取失败(${resp.status})`);
+          continue;
+        }
+        const blob = await resp.blob();
+        const file = new File([blob], item.name, { type: blob.type || 'application/octet-stream' });
+        const bank = await importFile(file, { overwrite: true });
+        results.push(bank ? `${item.name}：${bank.questions.length} 题` : `${item.name}：未解析出题目`);
+      } catch (err) {
+        results.push(`${item.name}：${err && err.message ? err.message : err}`);
+      }
+    }
+  } finally {
+    loading(false);
+  }
+  const summary = results.join('；');
+  toast(`示例题库导入结果 —— ${summary}`, 6000);
+  return summary;
+}
+
 /* ------------------------------------------------------------ 启动 */
 
 function bindShell() {

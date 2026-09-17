@@ -49,6 +49,13 @@ const SCANNED_PDF_MIN_CHARS = 50;
  */
 const PDF_LIB_URL = new URL('../vendor/pdf.min.mjs', import.meta.url).href;
 const PDF_WORKER_URL = new URL('../vendor/pdf.worker.min.mjs', import.meta.url).href;
+/**
+ * legacy（兼容版）构建：转译过、不依赖较新语法/API，专门给旧 WebView 兜底。
+ * 现代构建在个别 Android 机上会抛 InvalidPDFException / 莫名的 TypeError，
+ * 遇到就自动换成这一份重试（见 extractPdf）。
+ */
+const PDF_LEGACY_LIB_URL = new URL('../vendor/pdf.legacy.min.mjs', import.meta.url).href;
+const PDF_LEGACY_WORKER_URL = new URL('../vendor/pdf.worker.legacy.min.mjs', import.meta.url).href;
 const PDF_CMAP_URL = new URL('../vendor/cmaps/', import.meta.url).href;
 const PDF_STANDARD_FONTS_URL = new URL('../vendor/standard_fonts/', import.meta.url).href;
 const MAMMOTH_URL = new URL('../vendor/mammoth.browser.min.js', import.meta.url).href;
@@ -259,10 +266,17 @@ function injectScript(url) {
 async function extractDocx(file, warnings) {
   const mammoth = await loadMammoth();
 
-  if (typeof file.arrayBuffer !== 'function') {
-    throw new ExtractError('该文件对象不支持读取二进制内容，请重新选择文件。');
+  const bytes = await readFileBytes(file, 'Word');
+  // .docx 本质是 zip：开头必须是 PK。这样「把 .doc 改后缀」等情况能给出准确提示，
+  // 而不是笼统地说「文件可能已损坏」。
+  if (!(bytes[0] === 0x50 && bytes[1] === 0x4b)) {
+    const { ascii, hex, guess } = sniffFileType(bytes);
+    throw new ExtractError(
+      `「${file && file.name ? file.name : '所选文件'}」的实际内容不是 .docx（开头是 ${hex}「${ascii}」${guess ? '，' + guess : ''}）。` +
+        '.docx 必须是 Word 2007+ 的文档；旧版 .doc 请用 Word 打开后另存为 .docx。',
+    );
   }
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
 
   let result;
   try {
@@ -270,8 +284,10 @@ async function extractDocx(file, warnings) {
     result = await mammoth.extractRawText({ arrayBuffer });
   } catch (err) {
     console.warn('[extract] mammoth.extractRawText 失败（原始错误）:', err);
+    const name = (err && err.name) || 'Error';
+    const msg = String((err && err.message) || err || '').slice(0, 100);
     throw new ExtractError(
-      'Word 文档解析失败：文件可能已损坏，或不是标准的 .docx 格式（例如把 .doc 直接改了后缀）。',
+      `Word 文档解析失败（${name}: ${msg}）。若确认是正常的 .docx，请把这段信息发给我定位。`,
     );
   }
 
@@ -315,43 +331,51 @@ export function rawTextToLines(raw) {
  * pdf
  * ------------------------------------------------------------------ */
 
-/** pdf.js 模块的加载缓存（失败时不缓存，允许重试） */
-let pdfjsPromise = null;
+/** pdf.js 模块的加载缓存（按构建版本分别缓存；失败时不缓存，允许重试） */
+const pdfjsCache = new Map();
 
 /**
- * 动态 import vendor 里的 pdf.min.mjs（ESM）。
+ * 动态 import vendor 里的 pdf.js（ESM）。
  * 这里用 import() 而不是 <script>，是为了让 pdf.js 的 worker 机制正常工作；
  * 地址用 import.meta.url 解析，所以能随 web/ 一起搬到任意部署路径。
+ * @param {'modern'|'legacy'} [variant] 用哪一份构建，默认 modern
  * @returns {Promise<any>} pdf.js 命名空间
  * @throws {ExtractError} 依赖未加载
  */
-async function loadPdfLib() {
-  if (!pdfjsPromise) {
-    pdfjsPromise = import(/* webpackIgnore: true */ PDF_LIB_URL)
-      .then((mod) => {
-        if (!mod || typeof mod.getDocument !== 'function') {
-          throw new ExtractError(
-            '依赖未加载：PDF 解析库（pdf.js）内容不完整，没有找到 getDocument。' +
-              '请执行 `npm run vendor` 重新生成 web/vendor。',
-          );
-        }
-        // worker 用相对路径解析出来的同源绝对地址；Capacitor 下即
-        // https://localhost/vendor/pdf.worker.min.mjs
-        mod.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
-        return mod;
-      })
-      .catch((err) => {
-        pdfjsPromise = null; // 允许下次重试
-        if (err instanceof ExtractError) throw err;
-        console.warn('[extract] 加载 pdf.js 失败（原始错误）:', err);
+async function loadPdfLib(variant = 'modern') {
+  const cached = pdfjsCache.get(variant);
+  if (cached) return cached;
+
+  const isLegacy = variant === 'legacy';
+  const libUrl = isLegacy ? PDF_LEGACY_LIB_URL : PDF_LIB_URL;
+  const workerUrl = isLegacy ? PDF_LEGACY_WORKER_URL : PDF_WORKER_URL;
+
+  const promise = import(/* webpackIgnore: true */ libUrl)
+    .then((mod) => {
+      if (!mod || typeof mod.getDocument !== 'function') {
         throw new ExtractError(
-          '依赖未加载：PDF 解析库（pdf.js）读取失败，无法解析 .pdf。' +
-            '请确认 web/vendor/pdf.min.mjs 存在（执行 `npm run vendor` 重新生成），' +
-            'APK 需要重新打包才能生效。',
+          '依赖未加载：PDF 解析库（pdf.js）内容不完整，没有找到 getDocument。' +
+            '请执行 `npm run vendor` 重新生成 web/vendor。',
         );
-      });
-  }
-  return pdfjsPromise;
+      }
+      // worker 用相对路径解析出来的同源绝对地址；Capacitor 下即
+      // https://localhost/vendor/pdf.worker.min.mjs
+      mod.GlobalWorkerOptions.workerSrc = workerUrl;
+      return mod;
+    })
+    .catch((err) => {
+      pdfjsCache.delete(variant); // 允许下次重试
+      if (err instanceof ExtractError) throw err;
+      console.warn(`[extract] 加载 pdf.js(${variant}) 失败（原始错误）:`, err);
+      throw new ExtractError(
+        `依赖未加载：PDF 解析库（pdf.js ${isLegacy ? '兼容版' : '标准版'}）读取失败，无法解析 .pdf。` +
+          '请确认 web/vendor 下的 pdf*.mjs 存在（执行 `npm run vendor` 重新生成），' +
+          'APK 需要重新打包才能生效。',
+      );
+    });
+
+  pdfjsCache.set(variant, promise);
+  return promise;
 }
 
 /**
@@ -360,36 +384,201 @@ async function loadPdfLib() {
  * @param {string[]} warnings
  * @returns {Promise<Array<{page:number,line:number,para:number,text:string}>>}
  */
-async function extractPdf(file, warnings) {
-  const pdfjsLib = await loadPdfLib();
-
+/**
+ * 读取文件二进制内容，并把「读不到 / 读不完整」这类问题和「文件本身有问题」区分开。
+ * 安卓上从微信/QQ/网盘选文件时，ContentProvider 有时给不出内容（读到 0 字节），
+ * 以前这种情况会被糊成「文件已损坏」，实际是读取失败。
+ * @param {File|Blob} file
+ * @param {string} kind 用于提示的格式名（如 'PDF'）
+ * @returns {Promise<Uint8Array>}
+ */
+async function readFileBytes(file, kind) {
   if (typeof file.arrayBuffer !== 'function') {
     throw new ExtractError('该文件对象不支持读取二进制内容，请重新选择文件。');
   }
-  const data = new Uint8Array(await file.arrayBuffer());
+  let buffer;
+  try {
+    buffer = await file.arrayBuffer();
+  } catch (err) {
+    console.warn('[extract] file.arrayBuffer() 失败（原始错误）:', err);
+    throw new ExtractError(
+      `读取文件内容失败（${err && err.name ? err.name : '未知错误'}）：` +
+        '如果文件来自微信 / QQ / 网盘，请先「用其他应用打开 → 保存到手机文件」再导入。',
+    );
+  }
+  const bytes = new Uint8Array(buffer);
+  const size = Number(file.size || 0);
+  if (bytes.length === 0) {
+    throw new ExtractError(
+      size > 0
+        ? `文件内容读取为空（文件本身有 ${size} 字节）：多出现在微信 / QQ / 网盘里的文件，` +
+          '请先另存到手机「文件 / 下载」目录再导入。'
+        : '这个文件是空的（0 字节），请换一个文件。',
+    );
+  }
+  if (size && bytes.length < size) {
+    throw new ExtractError(
+      `文件只读到了 ${bytes.length} / ${size} 字节，内容不完整，无法解析。` +
+        '请先把文件另存到手机本地再导入。',
+    );
+  }
+  return bytes;
+}
+
+/** 常见文件头 → 人话，用于「后缀是 .pdf 但内容不是 PDF」的诊断 */
+function sniffFileType(bytes) {
+  const head = Array.from(bytes.slice(0, 8));
+  const ascii = head.map((b) => (b >= 32 && b <= 126 ? String.fromCharCode(b) : '.')).join('');
+  const hex = head.map((b) => b.toString(16).padStart(2, '0')).join(' ').toUpperCase();
+  let guess = '';
+  if (ascii.startsWith('PK')) guess = '这是一个压缩包（.zip / .docx / .xlsx 都长这样）';
+  else if (ascii.startsWith('%PDF')) guess = '确实是 PDF';
+  else if (ascii.startsWith('%!PS')) guess = '这是 PostScript 文件';
+  else if (ascii.startsWith('{\\rtf')) guess = '这是 RTF 文档';
+  else if (ascii.startsWith('DÐÏà') || hex.startsWith('D0 CF 11 E0')) guess = '这是旧版 Office 文档（.doc / .xls）';
+  else if (/^\s*</.test(ascii)) guess = '这是网页/HTML 内容';
+  return { ascii, hex, guess };
+}
+
+/**
+ * 校验确实是 PDF：内容开头 1KB 内必须出现 %PDF-。
+ * （有些 PDF 前面带 BOM 或空白，所以不能只看第 0 字节。）
+ * @param {Uint8Array} bytes
+ * @param {File|Blob} file
+ */
+function assertLooksLikePdf(bytes, file) {
+  const probe = bytes.slice(0, Math.min(1024, bytes.length));
+  const text = Array.from(probe, (b) => String.fromCharCode(b)).join('');
+  if (text.includes('%PDF-')) return;
+  const { ascii, hex, guess } = sniffFileType(bytes);
+  throw new ExtractError(
+    `「${file && file.name ? file.name : '所选文件'}」的实际内容不是 PDF（开头是 ${hex}「${ascii}」${guess ? '，' + guess : ''}，` +
+      `大小 ${bytes.length} 字节）。可能只是改了后缀名，请换用真正的 PDF 文件。`,
+  );
+}
+
+/**
+ * 打开失败时给出的诊断信息：带上真实错误名与信息，方便把问题一次说清。
+ * @param {any} err
+ * @param {File|Blob} file
+ * @param {Uint8Array} bytes
+ * @returns {string}
+ */
+function describePdfFailure(err, file, bytes) {
+  const name = (err && err.name) || 'Error';
+  const msg = String((err && err.message) || err || '').slice(0, 120);
+  const size = bytes ? `${(bytes.length / 1024).toFixed(0)} KB` : '未知大小';
+  const fileName = file && file.name ? file.name : '所选文件';
+
+  // 自动判断几条最常见的原因，直接给结论，别让用户猜
+  const hints = [];
+  if (bytes && bytes.length) {
+    const tail = bytes.slice(Math.max(0, bytes.length - 2048));
+    const tailText = Array.from(tail, (b) => String.fromCharCode(b)).join('');
+    if (!tailText.includes('%%EOF')) {
+      hints.push(
+        '文件末尾缺少 PDF 结束标记（%%EOF），内容很可能只读到一半（从微信 / QQ / 网盘直接选文件时常见）。' +
+          '请先把文件「保存到手机文件 / 下载目录」再导入。',
+      );
+    }
+    if (bytes.length > 30 * 1024 * 1024) {
+      hints.push('文件超过 30 MB，手机内存可能不够，建议先用 WPS 压缩，或拆成几份再导入。');
+    }
+  }
+  if (/InvalidPDF|Invalid PDF/i.test(`${name} ${msg}`)) {
+    hints.push('解析库认为该文件的结构不合法（最常见的原因是内容被截断，或 PDF 被加密限制了权限）。');
+  }
+  if (/password/i.test(msg)) {
+    hints.push('文件带密码保护，请先用 WPS / Adobe 去掉密码再导入。');
+  }
+
+  return (
+    `「${fileName}」（${size}）打开失败。\n` +
+    `真实错误：${name}: ${msg}\n` +
+    (hints.length ? '可能原因：\n· ' + hints.join('\n· ') + '\n' : '') +
+    '把这段信息发给我即可定位。'
+  );
+}
+
+/**
+ * 解析 .pdf → 文本行（每页一个 1 起的行号序列）。
+ *
+ * 先用 pdf.js 标准构建，失败就自动换 legacy（兼容版）重试一次 ——
+ * 部分安卓机的 WebView 打开现代构建会抛 InvalidPDFException 之类
+ * 与文件无关的错误，换 legacy 后正常。
+ * @param {File|Blob} file
+ * @param {string[]} warnings
+ * @returns {Promise<Array<{page:number,line:number,para:number,text:string}>>}
+ */
+async function extractPdf(file, warnings) {
+  const bytes = await readFileBytes(file, 'PDF');
+  assertLooksLikePdf(bytes, file);
+
+  const variants = ['modern', 'legacy'];
+  let lastError = null;
+
+  for (let i = 0; i < variants.length; i += 1) {
+    const variant = variants[i];
+    let pdfjsLib;
+    try {
+      pdfjsLib = await loadPdfLib(variant);
+    } catch (err) {
+      lastError = err;
+      if (i < variants.length - 1) {
+        warnings.push('PDF 解析库（标准版）加载失败，已自动改用兼容版重试。');
+        continue;
+      }
+      throw err;
+    }
+
+    try {
+      const lines = await readPdfDocument(pdfjsLib, bytes, warnings);
+      if (i > 0) warnings.push('已自动改用 PDF 解析库兼容版完成解析。');
+      return lines;
+    } catch (err) {
+      // 扫描版、加密这类「结论性」错误直接抛给用户，不做无谓的重试
+      if (err instanceof ExtractError) throw err;
+      lastError = err;
+      console.warn(`[extract] pdf.js(${variant}) 打开文档失败（原始错误）:`, err);
+      if (i < variants.length - 1) {
+        warnings.push('标准版解析失败，已自动改用兼容版重试。');
+      }
+    }
+  }
+
+  console.warn('[extract] PDF 解析最终失败（原始错误）:', lastError);
+  throw new ExtractError(describePdfFailure(lastError, file, bytes));
+}
+
+/**
+ * 用指定的 pdf.js 打开文档并逐页读取文本行（不做兜底重试，异常原样抛出）。
+ * @param {any} pdfjsLib 已设置好 workerSrc 的 pdf.js 命名空间
+ * @param {Uint8Array} sourceBytes 原始字节（内部会复制，因为 pdf.js 会把 buffer 转移给 worker）
+ * @param {string[]} warnings
+ */
+async function readPdfDocument(pdfjsLib, sourceBytes, warnings) {
+  // 必须复制：pdf.js 会把这份 ArrayBuffer transfer 给 worker，之后再读会是空的
+  const data = sourceBytes.slice();
+
+  const task = pdfjsLib.getDocument({
+    data,
+    // ↓ 必须指向 vendor 下的配套数据，否则中文 PDF 会一行都读不出来（见文件头注释）
+    cMapUrl: PDF_CMAP_URL,
+    cMapPacked: true,
+    standardFontDataUrl: PDF_STANDARD_FONTS_URL,
+  });
 
   let pdf;
   try {
-    const task = pdfjsLib.getDocument({
-      data,
-      // ↓ 必须指向 vendor 下的配套数据，否则中文 PDF 会一行都读不出来（见文件头注释）
-      cMapUrl: PDF_CMAP_URL,
-      cMapPacked: true,
-      standardFontDataUrl: PDF_STANDARD_FONTS_URL,
-    });
     pdf = await task.promise;
   } catch (err) {
-    console.warn('[extract] pdf.js 打开文档失败（原始错误）:', err);
     const raw = String(err && err.message ? err.message : err);
     if (/password/i.test(raw)) {
       throw new ExtractError('该 PDF 已加密，需要输入密码才能打开，请先解除密码保护再导入。');
     }
-    throw new ExtractError(
-      'PDF 打开失败：文件可能已损坏、不是有效的 PDF，或包含不支持的加密方式。',
-    );
+    throw err;
   }
 
-  // 先取页数存成局部变量：后面 destroy() 之后就不再依赖 pdf 对象了
   const numPages = Number(pdf.numPages) || 0;
 
   const lines = [];

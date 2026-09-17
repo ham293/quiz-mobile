@@ -1,6 +1,6 @@
 /** 题库首页：题库列表、导入、选择 */
 
-import { importFile, loadBank, navigate, state } from '../app.js';
+import { importFile, importSamples, loadBank, navigate, state } from '../app.js';
 import * as repo from '../bank.js';
 import * as eb from '../ebbinghaus.js';
 import { el, emptyState, confirmDialog, mount, toast } from './common.js';
@@ -21,6 +21,24 @@ export async function renderBanks(root) {
       label: '导入题库',
       onClick: () => onImport(root),
     }));
+    // 首次使用 / 导入失败时，用它快速判断是文件问题还是程序问题
+    children.push(
+      el('div.card', {}, [
+        el('h3.card-title', { text: '先试试示例题库？' }),
+        el('p.card-sub', {
+          text: '点下面按钮导入内置的示例题库（含一份 docx、一份 PDF）。' +
+            '如果示例能导入成功、而你的文件不行，就是文件格式的问题；如果示例也失败，把报错发我。',
+        }),
+        el('button.btn.block.mt12', {
+          type: 'button',
+          text: '导入示例题库',
+          onclick: async () => {
+            await importSamples();
+            await renderBanks(root);
+          },
+        }),
+      ]),
+    );
   }
 
   for (const b of banks) {
@@ -50,6 +68,14 @@ export async function renderBanks(root) {
   children.push(
     el('div.row.mt12', {}, [
       el('button.btn.grow', { type: 'button', text: '导入新题库', onclick: () => onImport(root) }),
+      el('button.btn', {
+        type: 'button',
+        text: '示例题库',
+        onclick: async () => {
+          await importSamples();
+          await renderBanks(root);
+        },
+      }),
     ]),
   );
 

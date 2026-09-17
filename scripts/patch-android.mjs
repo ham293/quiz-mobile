@@ -131,6 +131,7 @@ function main() {
 
   if (!revert) {
     applyIcons();
+    syncVersion(text);
     if (process.argv.includes('--strip-internet')) stripInternetPermission();
     if (!existsSync(KEYSTORE)) {
       console.error(`找不到密钥库：${KEYSTORE}`);
@@ -144,6 +145,30 @@ function main() {
     console.log(`已移除稳定签名配置（将使用默认 debug 签名）：${GRADLE}`);
   }
   writeFileSync(GRADLE, text, 'utf8');
+}
+
+/**
+ * 把 package.json 里的版本号同步进安卓工程：
+ *   versionName = 1.0.1，versionCode = 主*10000 + 次*100 + 修订（1.0.1 → 10001）。
+ * 这样每次发新版，系统看到的版本号是递增的。
+ */
+function syncVersion(gradleText) {
+  try {
+    const pkg = JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8'));
+    const [maj = 1, min = 0, rev = 0] = String(pkg.version || '1.0.0').split('.').map((n) => Number(n) || 0);
+    const versionCode = maj * 10000 + min * 100 + rev;
+    const before = gradleText;
+    const next = gradleText
+      .replace(/versionCode\s+\d+/, `versionCode ${versionCode}`)
+      .replace(/versionName\s+"[^"]*"/, `versionName "${pkg.version}"`);
+    if (next !== before) {
+      console.log(`已同步版本号：versionName=${pkg.version} versionCode=${versionCode}`);
+    }
+    return next;
+  } catch (err) {
+    console.warn('同步版本号失败（忽略）:', err && err.message);
+    return gradleText;
+  }
 }
 
 main();

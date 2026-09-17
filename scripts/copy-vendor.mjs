@@ -59,6 +59,25 @@ const FILE_ASSETS = [
     ],
   },
   {
+    // 老 WebView 兜底：legacy 构建是转译过的（不依赖较新的语法/API），
+    // 部分 Android 机型（尤其国产 ROM 的旧 WebView）打开现代构建会报
+    // 「Invalid PDF structure」这类看不懂的错，extract.js 会自动改用这一份重试。
+    dest: 'pdf.legacy.min.mjs',
+    desc: 'pdf.js 主库（legacy 构建，老 WebView 兜底）',
+    candidates: [
+      'pdfjs-dist/legacy/build/pdf.min.mjs',
+      'pdfjs-dist/legacy/build/pdf.mjs',
+    ],
+  },
+  {
+    dest: 'pdf.worker.legacy.min.mjs',
+    desc: 'pdf.js Worker（legacy 构建，与上面配对，版本必须一致）',
+    candidates: [
+      'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
+      'pdfjs-dist/legacy/build/pdf.worker.mjs',
+    ],
+  },
+  {
     dest: 'mammoth.browser.min.js',
     desc: 'mammoth 浏览器构建（.docx → 纯文本，UMD，挂到 globalThis.mammoth）',
     // 实测：mammoth@1.8+ 的浏览器 UMD 就在**包根目录**，没有 dist/ 子目录。

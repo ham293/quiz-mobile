@@ -146,7 +146,44 @@
         check('导出 PDF 成功', false, String(e && e.message));
       }
 
-      /* 7. 数据落盘检查 */
+      /* 7. 真实 PDF 导入 + 各种「假文件 / 坏文件」的报错是否准确 */
+      const pdfBlob = await (await fetch('../tests/fixtures/sample-questions.pdf')).blob();
+      const realPdf = new File([pdfBlob], '真的.pdf', { type: 'application/pdf' });
+      try {
+        const r = await extractLines(realPdf);
+        check('真实 PDF 能导入且记录页码行号', r.kind === 'pdf' && r.lines.length > 20 && r.lines.every((l) => l.page >= 1 && l.line >= 1),
+          `${r.lines.length} 行`);
+      } catch (e) {
+        check('真实 PDF 能导入且记录页码行号', false, String(e.message).slice(0, 80));
+      }
+
+      // 把 docx 改名成 .pdf
+      const docxBlob2 = await (await fetch('../tests/fixtures/sample-questions.docx')).blob();
+      try {
+        await extractLines(new File([docxBlob2], '伪装的.pdf', { type: 'application/pdf' }));
+        check('伪装成 .pdf 的文件被识破且提示准确', false, '居然解析成功了');
+      } catch (e) {
+        check('伪装成 .pdf 的文件被识破且提示准确', /实际内容不是 PDF/.test(e.message), String(e.message).slice(0, 60));
+      }
+
+      // 空文件
+      try {
+        await extractLines(new File([], '空的.pdf', { type: 'application/pdf' }));
+        check('空文件提示准确', false, '居然没报错');
+      } catch (e) {
+        check('空文件提示准确', /空的|0 字节/.test(e.message), String(e.message).slice(0, 40));
+      }
+
+      // 有 %PDF- 头但内容损坏：应报真实错误名，而不是笼统甩锅
+      try {
+        const junk = new File([new TextEncoder().encode('%PDF-1.4\n这不是真的 PDF 内容，随便写点东西。')], '损坏.pdf');
+        await extractLines(junk);
+        check('损坏 PDF 报出真实错误并自动尝试兼容版', false, '居然解析成功了');
+      } catch (e) {
+        check('损坏 PDF 报出真实错误并自动尝试兼容版', /真实错误/.test(e.message), String(e.message).replace(/\n/g, ' | ').slice(0, 90));
+      }
+
+      /* 8. 数据落盘检查 */
       const banks = await repo.listBanks();
       check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
       check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);
