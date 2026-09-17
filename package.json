@@ -1,15 +1,16 @@
 {
   "name": "quiz-mobile",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "private": true,
   "description": "刷题助手 · 手机版（Capacitor + 原生 JS）",
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/*.test.mjs\"",
-    "vendor": "node scripts/copy-vendor.mjs",
+    "vendor": "node scripts/copy-vendor.mjs && node scripts/build-cmaps.mjs",
     "cap:add": "cap add android",
     "cap:sync": "cap sync android",
-    "apk": "cd android && gradlew.bat assembleDebug"
+    "apk": "cd android && gradlew.bat assembleDebug",
+    "cmaps": "node scripts/build-cmaps.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

@@ -66,17 +66,40 @@ export function toast(message, ms = 2000) {
 /**
  * 显示/隐藏全屏加载遮罩。
  * @param {string|false} text 传 false 表示隐藏
+ * @param {{onCancel?: Function, showCancelAfter?: number}} [opts]
+ *        onCancel：点「取消」时回调（解析卡住时用户能自己中断，不用干等）
  */
-export function loading(text) {
+export function loading(text, opts = {}) {
   const node = document.getElementById('loading');
   if (!node) return;
+  const textNode = document.getElementById('loading-text');
+  const cancelBtn = document.getElementById('loading-cancel');
   if (text === false) {
     node.classList.add('hidden');
+    if (cancelBtn) cancelBtn.classList.add('hidden');
+    clearTimeout(loading._timer);
     return;
   }
-  document.getElementById('loading-text').textContent = text || '处理中…';
+  if (textNode) textNode.textContent = text || '处理中…';
   node.classList.remove('hidden');
+
+  if (cancelBtn) {
+    clearTimeout(loading._timer);
+    cancelBtn.classList.add('hidden');
+    cancelBtn.onclick = null;
+    if (typeof opts.onCancel === 'function') {
+      const delay = Number(opts.showCancelAfter) || 0;
+      loading._timer = setTimeout(() => {
+        cancelBtn.classList.remove('hidden');
+        cancelBtn.onclick = () => {
+          cancelBtn.classList.add('hidden');
+          opts.onCancel();
+        };
+      }, delay);
+    }
+  }
 }
+loading._timer = null;
 
 /** 关闭底部弹层 */
 export function closeSheet() {

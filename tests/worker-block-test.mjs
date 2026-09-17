@@ -1,23 +1,30 @@
 /**
- * 决定性实验：模拟「安卓 WebView 里 Worker 发不出网络请求」的环境，
- * 验证 pdf.js 取不到字符集（cmaps）时，我们的 useWorkerFetch:false 修复是否有效。
+ * 决定性实验：在"取不到字符集"的环境下，验证中文 PDF 还能不能解码出文字。
  *
- * 做法：用 CDP 的 Target.setAutoAttach 挂上页面里的每个 Worker 目标，
- * 单独在这些 Worker 里把 cmaps 与 standard_fonts 的请求全部屏蔽，
- * 主线程的请求不受影响 —— 这正是安卓 WebView 的真实行为
- * （Capacitor 的 shouldInterceptRequest 不拦截 Worker 发出的请求）。
+ * 两种模式（环境变量 BLOCK_ALL）：
+ *   - 默认：只屏蔽 **Worker** 目标里的 cmaps 请求（精确模拟安卓 WebView：
+ *     Capacitor 的 shouldInterceptRequest 不拦截 Worker 发出的请求）
+ *   - BLOCK_ALL=1：页面与 Worker 里**全部**屏蔽 cmaps 请求，即"彻底断网"，
+ *     用来验证内嵌字符集（web/js/cmaps-data.js）这条路是真的不依赖网络
  *
  * 用法：
  *   chrome --headless=new --remote-debugging-port=9224 --user-data-dir=<临时> about:blank
- *   node tests/worker-block-test.mjs
+ *   node tests/worker-block-test.mjs            # 只断 Worker
+ *   BLOCK_ALL=1 node tests/worker-block-test.mjs # 全断
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const PORT = process.env.CDP_PORT || '9224';
+const BLOCK_ALL = process.env.BLOCK_ALL === '1';
 const CDP = `http://127.0.0.1:${PORT}`;
 const URL_PAGE = 'http://127.0.0.1:8765/tests/pdf-only-test.html';
 const OUT = resolve('tests/shots');
+
+// 注意：模式必须精确匹配 vendor 下的字符集目录。
+// 早先用过 '*cmaps*'，结果把 web/js/cmaps-data.js（内嵌数据模块）也拦了，
+// 会造出「模块加载失败」的假象 —— 那不是我们要模拟的情况。
+const BLOCKED_URLS = ['*/vendor/cmaps/*', '*/vendor/standard_fonts/*'];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -71,6 +78,13 @@ async function main() {
     flatten: true,
   });
 
+  // 全断模式：主线程（页面）里也屏蔽 cmaps
+  if (BLOCK_ALL) {
+    await send('Network.enable');
+    await send('Network.setBlockedURLs', { urls: BLOCKED_URLS });
+    console.log('已屏蔽主线程的 cmaps 请求（全断模式）');
+  }
+
   // 每个新出现的 worker 目标：单独屏蔽 cmaps 请求
   on(async (msg) => {
     if (msg.method !== 'Target.attachedToTarget') return;
@@ -80,7 +94,7 @@ async function main() {
     blockedWorkers.push(sessionId);
     try {
       await send('Network.enable', {}, sessionId);
-      await send('Network.setBlockedURLs', { urls: ['*cmaps*', '*standard_fonts*'] }, sessionId);
+      await send('Network.setBlockedURLs', { urls: BLOCKED_URLS }, sessionId);
       console.log(`已屏蔽 Worker(${info.url.split('/').pop()}) 的 cmaps 请求`);
     } catch (err) {
       console.warn('屏蔽失败:', err.message);

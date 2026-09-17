@@ -215,9 +215,33 @@ export function showErrorDetail(title, detail) {
 export async function importFile(file, opts = {}) {
   if (!file) return null;
   const bankName = opts.name || file.name.replace(/\.[^.]+$/, '') || '未命名题库';
-  loading(`正在解析「${file.name}」…`);
+  const sizeText = file.size ? `（${(file.size / 1024 / 1024).toFixed(1)} MB）` : '';
+  let cancelled = false;
+  const showProgress = (text) => loading(text, {
+    // 15 秒后才出现「取消」按钮：正常情况下用不到，卡住时用户能自己中断
+    showCancelAfter: 15000,
+    onCancel: () => {
+      cancelled = true;
+      loading('正在取消…（后台仍会收尾，可直接退出本页）');
+    },
+  });
+  showProgress(`正在解析「${file.name}」${sizeText}…`);
+
   try {
-    const { lines } = await extractLines(file);
+    const { lines } = await extractLines(file, {
+      onProgress: (info) => {
+        if (cancelled) return;
+        if (info && info.page && info.pages) {
+          showProgress(`正在解析「${file.name}」…　第 ${info.page}/${info.pages} 页`);
+        } else if (info && info.stage) {
+          showProgress(`${info.stage}：${file.name}`);
+        }
+      },
+    });
+    if (cancelled) {
+      showErrorDetail('已取消导入', '你取消了这次导入。如果解析过程一直不出结果，可以试试：\n· 先把文件另存到手机「文件 / 下载」目录再导入；\n· 用 WPS 把 PDF 另存为一份新的（去掉加密/压缩问题）再导入。');
+      return null;
+    }
     const parsed = parseLines(lines, bankName);
     if (!parsed.questions.length) {
       loading(false);

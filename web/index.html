@@ -28,7 +28,11 @@
 
   <div id="toast" class="toast hidden"></div>
   <div id="sheet" class="sheet-mask hidden"><div class="sheet" id="sheet-body"></div></div>
-  <div id="loading" class="loading hidden"><div class="spinner"></div><div id="loading-text">处理中…</div></div>
+  <div id="loading" class="loading hidden">
+    <div class="spinner"></div>
+    <div id="loading-text">处理中…</div>
+    <button id="loading-cancel" class="btn hidden" type="button">取消</button>
+  </div>
 
   <!-- 隐藏的文件选择器：导入题库用（同时给出扩展名与 MIME，兼容各家安卓文件选择器） -->
   <input id="file-input" type="file"

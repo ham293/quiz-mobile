@@ -63,6 +63,11 @@ jobs:
       - name: 拷贝离线依赖到 web/vendor
         run: node scripts/copy-vendor.mjs
 
+      - name: 生成内嵌中文字符集（cmaps）
+        # 中文 PDF 解码必须有 cmap；安卓 WebView 里 Worker 取不到本地文件，
+        # 所以把 cmap 内嵌成 web/js/cmaps-data.js 一起打进 APK
+        run: node scripts/build-cmaps.mjs
+
       - name: 运行单元测试
         run: npm test
 

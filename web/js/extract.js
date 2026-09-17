@@ -23,7 +23,15 @@
  * translateFont 失败，该页 getTextContent() 会返回 **0 个 item**，从而被误判成
  * 「扫描版 PDF」。实测 tests/fixtures/sample-questions.pdf（2 页中文 PDF）：
  *   不给 cMapUrl → 每页 0 个 item、0 个字符；给了 cMapUrl → 第 1 页 16 行、第 2 页 8 行。
+ *
+ * 【更强的一层保险】安卓 WebView 里 Worker 发出的网络请求**不走** Capacitor 的本地
+ * 资源拦截，上面这条路在手机上照样拿不到 bcmap（页数读得到、文字全空）。
+ * 因此本项目把中文相关的 cmaps 直接内嵌成 web/js/cmaps-data.js（由
+ * scripts/build-cmaps.mjs 生成），并通过自定义 BinaryDataFactory 优先从内存取，
+ * 完全不需要网络。网络路径仅作为内嵌表未覆盖时的兜底保留。
  */
+
+import { getEmbeddedCmap } from './cmaps-data.js';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -94,8 +102,9 @@ export function isSupported(file) {
  * 抽取文本行。
  * @param {File|Blob} file 用户选择的文件；需具备 .arrayBuffer() / .text()，
  *        建议是 File（带 .name，用于判断格式）；Blob 可通过 opts.name 补文件名。
- * @param {{name?: string, [key: string]: any}} [opts] 可选参数
+ * @param {{name?: string, onProgress?: (info: object) => void, [key: string]: any}} [opts] 可选参数
  *        - name: file 没有 .name 时用它判断格式（Blob 兼容）
+ *        - onProgress: 进度回调，形如 { stage, page?, pages?, strategy? }，用于界面显示
  * @returns {Promise<{lines: Array<{page:number,line:number,para:number,text:string}>,
  *   kind: 'docx'|'pdf'|'txt', warnings: string[]}>}
  * @throws {ExtractError} 旧版 .doc、扫描版 PDF、缺依赖、文件损坏、格式不支持
@@ -108,14 +117,16 @@ export async function extractLines(file, opts = {}) {
   const warnings = [];
   const name = resolveFileName(file, opts?.name);
   const ext = getExtension(name);
+  const onProgress = typeof opts?.onProgress === 'function' ? opts.onProgress : undefined;
 
   try {
     switch (ext) {
       case '.docx':
+        if (onProgress) onProgress({ stage: '正在读取 Word 文档' });
         return { lines: await extractDocx(file, warnings), kind: 'docx', warnings };
 
       case '.pdf':
-        return { lines: await extractPdf(file, warnings), kind: 'pdf', warnings };
+        return { lines: await extractPdf(file, warnings, onProgress), kind: 'pdf', warnings };
 
       case '.txt':
         return { lines: await extractPlainText(file, warnings), kind: 'txt', warnings };
@@ -386,26 +397,38 @@ async function loadPdfLib(variant = 'modern') {
  */
 /**
  * 读取文件二进制内容，并把「读不到 / 读不完整」这类问题和「文件本身有问题」区分开。
- * 安卓上从微信/QQ/网盘选文件时，ContentProvider 有时给不出内容（读到 0 字节），
+ * 安卓上从微信/QQ/网盘选文件时，ContentProvider 有时给不出内容（读到 0 字节 / 一直不返回），
  * 以前这种情况会被糊成「文件已损坏」，实际是读取失败。
  * @param {File|Blob} file
  * @param {string} kind 用于提示的格式名（如 'PDF'）
+ * @param {number} [timeoutMs] 读取超时，默认 30 秒（安卓上 file.arrayBuffer() 偶发卡死）
  * @returns {Promise<Uint8Array>}
  */
-async function readFileBytes(file, kind) {
+async function readFileBytes(file, kind, timeoutMs = 30000) {
   if (typeof file.arrayBuffer !== 'function') {
     throw new ExtractError('该文件对象不支持读取二进制内容，请重新选择文件。');
   }
+
+  // 先把「读取」这一步也加上超时：某些安卓机型读 content:// 大文件时会一直不返回，
+  // 表现就是界面永远停在「正在解析…」。
   let buffer;
   try {
-    buffer = await file.arrayBuffer();
+    buffer = await withTimeout(file.arrayBuffer(), timeoutMs, '读取文件内容');
   } catch (err) {
-    console.warn('[extract] file.arrayBuffer() 失败（原始错误）:', err);
+    console.warn('[extract] file.arrayBuffer() 失败或超时（原始错误）:', err);
+    const name = (err && err.name) || '错误';
+    const msg = String((err && err.message) || err);
+    const isTimeout = /超过 \d+ 秒/.test(msg);
     throw new ExtractError(
-      `读取文件内容失败（${err && err.name ? err.name : '未知错误'}）：` +
-        '如果文件来自微信 / QQ / 网盘，请先「用其他应用打开 → 保存到手机文件」再导入。',
+      isTimeout
+        ? `读取文件内容超时（超过 ${Math.round(timeoutMs / 1000)} 秒还没有读完）：` +
+          '文件可能来自微信 / QQ / 网盘，或者本身很大。\n' +
+          '请先把文件「保存到手机文件 / 下载目录」，或换一份小一点的文件再导入。'
+        : `读取文件内容失败（${name}）：` +
+          '如果文件来自微信 / QQ / 网盘，请先「用其他应用打开 → 保存到手机文件」再导入。',
     );
   }
+
   const bytes = new Uint8Array(buffer);
   const size = Number(file.size || 0);
   if (bytes.length === 0) {
@@ -551,6 +574,42 @@ function isInvalidPdfError(err) {
   return /InvalidPDF|Invalid PDF structure/i.test(raw);
 }
 
+/**
+ * 自定义二进制数据源（pdf.js 的 BinaryDataFactory 接口）：
+ * **先查内嵌的中文 cmaps（完全不走网络）**，内嵌表里没有的（例如日韩 cmap、
+ * 标准 14 字体、wasm）再按 pdf.js 原有的方式用 fetch 取。
+ *
+ * pdf.js 内部会 `new BinaryDataFactory({ cMapUrl, standardFontDataUrl, wasmUrl })`
+ * 然后调用 `fetch({ kind, filename })`，成功时要返回 **Uint8Array**。
+ */
+class QuizBinaryDataFactory {
+  constructor({ cMapUrl = null, standardFontDataUrl = null, wasmUrl = null } = {}) {
+    this.cMapUrl = cMapUrl;
+    this.standardFontDataUrl = standardFontDataUrl;
+    this.wasmUrl = wasmUrl;
+  }
+
+  /**
+   * @param {{kind: string, filename: string}} req
+   * @returns {Promise<Uint8Array>}
+   */
+  async fetch({ kind, filename }) {
+    const embedded = getEmbeddedCmap(filename);
+    if (embedded) return embedded;
+
+    const base =
+      kind === 'standardFontDataUrl'
+        ? this.standardFontDataUrl
+        : kind === 'wasmUrl'
+          ? this.wasmUrl
+          : this.cMapUrl;
+    if (!base) throw new Error(`缺少 ${kind} 参数，无法加载 ${filename}`);
+    const resp = await fetch(`${base}${filename}`);
+    if (!resp.ok) throw new Error(`加载 ${kind} 失败（HTTP ${resp.status}）：${filename}`);
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+}
+
 /** 上次成功的解析方式（记住它，下次直接用，省掉反复试错的时间） */
 const PDF_STRATEGY_KEY = 'quiz.pdfStrategy';
 
@@ -611,29 +670,36 @@ function isNativePlatform() {
  *
  * 依次尝试 4 种组合，哪种能跑通就用哪种：
  *   标准版/兼容版 × 多线程/主线程
- * 在安卓 App 里**主线程模式优先**（WebView 的 Worker 取不到 cmaps/字体，会「页数对、文字空」）；
- * 上次成功的那种会被记住并优先尝试。
+ * 多线程优先（不阻塞界面），配合 `useWorkerFetch: false` 让主线程去取字符集；
+ * 「页数对但没文字」会换下一种方式重试；总耗时封顶，避免界面一直停在「正在解析…」。
  * @param {File|Blob} file
  * @param {string[]} warnings
+ * @param {(info: {stage: string, page?: number, pages?: number, strategy?: string}) => void} [onProgress]
  * @returns {Promise<Array<{page:number,line:number,para:number,text:string}>>}
  */
-async function extractPdf(file, warnings) {
+async function extractPdf(file, warnings, onProgress) {
+  const report = (info) => {
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress(info);
+      } catch {
+        /* 进度回调出错不影响解析 */
+      }
+    }
+  };
+
+  const sizeMb = file && file.size ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : '';
+  report({ stage: sizeMb ? `正在读取文件（${sizeMb}）` : '正在读取文件' });
   const bytes = await readFileBytes(file, 'PDF');
   assertLooksLikePdf(bytes, file);
+  report({ stage: '正在解析 PDF 结构' });
 
-  const workerFirst = [
-    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
-    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 15000 },
-    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 90000 },
-    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 90000 },
+  const strategies = [
+    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 20000 },
+    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 20000 },
+    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 45000 },
+    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 45000 },
   ];
-  const mainThreadFirst = [
-    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 90000 },
-    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 90000 },
-    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
-    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 15000 },
-  ];
-  const strategies = isNativePlatform() ? mainThreadFirst : workerFirst;
 
   // 上次成功的那一种排到最前面（例如这台手机必须用主线程模式）
   const saved = loadSavedStrategy();
@@ -642,6 +708,7 @@ async function extractPdf(file, warnings) {
     if (idx > 0) strategies.unshift(strategies.splice(idx, 1)[0]);
   }
 
+  const startedAt = Date.now();
   let lastError = null;
   const tried = [];
   const noText = [];
@@ -650,6 +717,11 @@ async function extractPdf(file, warnings) {
   for (let i = 0; i < strategies.length; i += 1) {
     const strategy = strategies[i];
 
+    // 整体时间封顶：避免 4 种方式依次卡满，界面一直转圈
+    if (Date.now() - startedAt > 150000) {
+      tried.push('（总耗时超过 150 秒，已停止继续尝试）');
+      break;
+    }
     // 已经判定「文件结构不合法」两次以上 → 是文件本身的问题，别再耗时间
     if (contentInvalid && tried.length >= 2) break;
 
@@ -663,7 +735,8 @@ async function extractPdf(file, warnings) {
     }
 
     try {
-      const lines = await readPdfDocument(pdfjsLib, bytes, warnings, strategy);
+      report({ stage: `正在用「${strategy.label}」模式解析`, strategy: strategy.label });
+      const lines = await readPdfDocument(pdfjsLib, bytes, warnings, strategy, report);
       saveStrategy(strategy.label);
       if (tried.length) {
         warnings.push(`已改用「${strategy.label}」模式完成解析（前 ${tried.length} 种方式未成功）。`);
@@ -707,8 +780,9 @@ async function extractPdf(file, warnings) {
  * @param {Uint8Array} sourceBytes 原始字节（内部会复制，因为 pdf.js 会把 buffer 转移给 worker）
  * @param {string[]} warnings
  * @param {{variant?:'modern'|'legacy', mainThread?:boolean, label?:string, timeout?:number}} [strategy]
+ * @param {(info: {stage: string, page?: number, pages?: number}) => void} [onProgress]
  */
-async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
+async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}, onProgress) {
   const { variant = 'modern', mainThread = false, label = 'PDF', timeout = 60000 } = strategy;
 
   if (mainThread) {
@@ -725,7 +799,9 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
     cMapUrl: PDF_CMAP_URL,
     cMapPacked: true,
     standardFontDataUrl: PDF_STANDARD_FONTS_URL,
-    // ★ 关键：让**主线程**去取 cmaps / 标准字体，而不是让 Worker 去取。
+    // ★ 关键 1：中文 cmaps 走**内嵌数据**（不依赖网络），内嵌表没有的才回退到 fetch
+    BinaryDataFactory: QuizBinaryDataFactory,
+    // ★ 关键 2：让**主线程**去取剩下的数据，而不是让 Worker 去取。
     //   安卓 WebView 里 Worker 发出的请求不走 Capacitor 的本地资源拦截，
     //   结果就是「页数读到了、文字全是空」（中文 PDF 尤其明显：字体要 CMap 才能解码）。
     useWorkerFetch: false,
@@ -755,6 +831,14 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
 
   try {
     for (let pageNumber = 1; pageNumber <= numPages; pageNumber += 1) {
+      // 逐页上报进度，界面才不会「一直停在正在解析」（大文件解析要几十秒很正常）
+      if (typeof onProgress === 'function') {
+        try {
+          onProgress({ stage: '正在读取文字', page: pageNumber, pages: numPages });
+        } catch {
+          /* 忽略 */
+        }
+      }
       let content = null;
       try {
         const page = await pdf.getPage(pageNumber);
