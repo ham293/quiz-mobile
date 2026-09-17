@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>PDF 提取单页测试</title></head>
+<body>
+<pre id="out">running</pre>
+<script type="module">
+  // 只做一件事：把示例 PDF 交给 extract.js 解析，把结果挂到 window.__result
+  const out = document.getElementById('out');
+  const payload = { ok: false, error: '未开始' };
+  try {
+    const { extractLines } = await import('../web/js/extract.js');
+    const blob = await (await fetch('../tests/fixtures/sample-questions.pdf')).blob();
+    const file = new File([blob], 'sample-questions.pdf', { type: 'application/pdf' });
+    const r = await extractLines(file);
+    const chars = r.lines.reduce((n, l) => n + l.text.replace(/\s/g, '').length, 0);
+    payload.ok = chars > 100;
+    payload.lines = r.lines.length;
+    payload.chars = chars;
+    payload.warnings = r.warnings;
+  } catch (e) {
+    payload.ok = false;
+    payload.error = String(e && e.message ? e.message : e).slice(0, 300);
+  }
+  window.__result = payload;
+  out.textContent = JSON.stringify(payload, null, 2);
+</script>
+</body>
+</html>

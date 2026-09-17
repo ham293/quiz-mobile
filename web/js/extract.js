@@ -573,11 +573,46 @@ function saveStrategy(label) {
 }
 
 /**
+ * 内部错误：PDF 能打开、页数也读到了，但**一个字符都没提取出来**。
+ * 这通常不是「扫描版」，而是字体/字符集（cmap）没取到 —— 安卓 WebView 里
+ * Worker 发出的网络请求不走 Capacitor 的本地资源拦截，而 pdf.js 默认让 Worker
+ * 去下载 cmaps，于是就出现「页数对、文字全空」。
+ * 这种失败必须**换一种策略重试**，不能直接当成扫描版告诉用户。
+ */
+class PdfNoTextError extends Error {
+  constructor(message, pages = 0, chars = 0) {
+    super(message);
+    this.name = 'PdfNoTextError';
+    this.pages = pages;
+    this.chars = chars;
+  }
+}
+
+/** 是否运行在 Capacitor 原生壳里（安卓 App） */
+function isNativePlatform() {
+  try {
+    if (globalThis.Capacitor && typeof globalThis.Capacitor.isNativePlatform === 'function') {
+      if (globalThis.Capacitor.isNativePlatform()) return true;
+    }
+  } catch {
+    /* 忽略 */
+  }
+  // 兜底判断：Capacitor 把页面跑在 https://localhost 上
+  try {
+    const loc = globalThis.location;
+    return !!loc && loc.protocol === 'https:' && loc.hostname === 'localhost';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 解析 .pdf → 文本行（每页一个 1 起的行号序列）。
  *
- * 依次尝试 4 种组合，哪种能跑通就用哪种（安卓 WebView 的兼容问题主要靠「主线程模式」解决）：
- *   ① 标准版 + 多线程   ② 兼容版 + 多线程   ③ 标准版 + 主线程   ④ 兼容版 + 主线程
- * 上次成功的那种会被记住，并在下次优先尝试。
+ * 依次尝试 4 种组合，哪种能跑通就用哪种：
+ *   标准版/兼容版 × 多线程/主线程
+ * 在安卓 App 里**主线程模式优先**（WebView 的 Worker 取不到 cmaps/字体，会「页数对、文字空」）；
+ * 上次成功的那种会被记住并优先尝试。
  * @param {File|Blob} file
  * @param {string[]} warnings
  * @returns {Promise<Array<{page:number,line:number,para:number,text:string}>>}
@@ -586,12 +621,19 @@ async function extractPdf(file, warnings) {
   const bytes = await readFileBytes(file, 'PDF');
   assertLooksLikePdf(bytes, file);
 
-  const strategies = [
+  const workerFirst = [
     { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
     { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 15000 },
-    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 60000 },
-    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 60000 },
+    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 90000 },
+    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 90000 },
   ];
+  const mainThreadFirst = [
+    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 90000 },
+    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 90000 },
+    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
+    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 15000 },
+  ];
+  const strategies = isNativePlatform() ? mainThreadFirst : workerFirst;
 
   // 上次成功的那一种排到最前面（例如这台手机必须用主线程模式）
   const saved = loadSavedStrategy();
@@ -602,6 +644,7 @@ async function extractPdf(file, warnings) {
 
   let lastError = null;
   const tried = [];
+  const noText = [];
   let contentInvalid = false;
 
   for (let i = 0; i < strategies.length; i += 1) {
@@ -627,13 +670,31 @@ async function extractPdf(file, warnings) {
       }
       return lines;
     } catch (err) {
-      // 扫描版 / 加密 这类结论性错误直接抛给用户，不做无谓重试
-      if (err instanceof ExtractError) throw err;
       lastError = err;
+      // 「页数读到了，但一个字都没有」→ 换种方式再来（多为取不到字符集，不一定是扫描版）
+      if (err instanceof PdfNoTextError) {
+        noText.push(`${strategy.label}：${err.pages} 页 / ${err.chars} 字符`);
+        console.warn(`[extract] ${strategy.label} 未提取到文字，换方式重试:`, err.message);
+        tried.push(`${strategy.label}：未提取到文字`);
+        continue;
+      }
+      // 加密 / 旧格式等结论性错误直接抛给用户
+      if (err instanceof ExtractError) throw err;
       if (isInvalidPdfError(err)) contentInvalid = true;
       console.warn(`[extract] PDF 解析失败（${strategy.label}，原始错误）:`, err);
       tried.push(`${strategy.label}：${String((err && err.message) || err).slice(0, 60)}`);
     }
+  }
+
+  // 所有方式都「没文字」→ 才判定为扫描版，并把每种方式的结果列出来
+  if (noText.length) {
+    throw new ExtractError(
+      `这个 PDF 没有提取到可读文字（${noText.join('；')}）。\n\n` +
+        '两种可能：\n' +
+        '· 是扫描版/图片版 PDF（整页都是图片，没有文字层）→ 本程序不做 OCR，' +
+        '请先用 WPS 的「PDF 转文字」或其它 OCR 工具转一遍再导入；\n' +
+        '· 文字层存在但字体字符集读不出来（加密或受限字体）→ 用 WPS 打开后「另存为」一份新 PDF 再导入。',
+    );
   }
 
   console.warn('[extract] PDF 解析最终失败（原始错误）:', lastError);
@@ -664,6 +725,10 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
     cMapUrl: PDF_CMAP_URL,
     cMapPacked: true,
     standardFontDataUrl: PDF_STANDARD_FONTS_URL,
+    // ★ 关键：让**主线程**去取 cmaps / 标准字体，而不是让 Worker 去取。
+    //   安卓 WebView 里 Worker 发出的请求不走 Capacitor 的本地资源拦截，
+    //   结果就是「页数读到了、文字全是空」（中文 PDF 尤其明显：字体要 CMap 才能解码）。
+    useWorkerFetch: false,
   });
 
   let pdf;
@@ -724,11 +789,13 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
     }
   }
 
-  // 扫描版判定：有页面但全篇几乎没有可读文字
+  // 「页数读到了但几乎没有文字」不一定真是扫描版（也可能是取不到字符集），
+  // 这里抛内部信号，交给 extractPdf 换一种解析方式再试。
   if (textPageCount === 0 || totalChars < SCANNED_PDF_MIN_CHARS) {
-    throw new ExtractError(
-      `该 PDF 可能是扫描版/图片版（共 ${numPages} 页，仅提取到 ${totalChars} 个字符），` +
-        '暂不支持 OCR 识别文字。请改用文字版 PDF，或用 Word/PDF 工具先做一次 OCR 转换后再导入。',
+    throw new PdfNoTextError(
+      `共 ${numPages} 页，仅提取到 ${totalChars} 个字符`,
+      numPages,
+      totalChars,
     );
   }
 
