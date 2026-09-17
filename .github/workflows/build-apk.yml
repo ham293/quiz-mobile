@@ -38,8 +38,24 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: 准备 Android SDK
-        uses: android-actions/setup-android@v3
+      - name: 检查 Android SDK
+        # GitHub 的 ubuntu-latest 运行器已预装 Android SDK（ANDROID_SDK_ROOT 已设好），
+        # 所以不需要 android-actions/setup-android；这里只做检查与补装缺失组件。
+        run: |
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          SDK="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          echo "SDK 目录：$SDK"
+          ls "$SDK" 2>/dev/null | head -20 || true
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            echo "补齐 platforms;android-35 与 build-tools"
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null 2>&1 || true
+          else
+            echo "未找到 sdkmanager，交给 Gradle 自行处理"
+          fi
+          ls "$SDK/platforms" 2>/dev/null || true
 
       - name: 安装 npm 依赖
         run: npm ci
