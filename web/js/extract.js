@@ -458,13 +458,15 @@ function assertLooksLikePdf(bytes, file) {
 }
 
 /**
- * 打开失败时给出的诊断信息：带上真实错误名与信息，方便把问题一次说清。
+ * 打开失败时给出的诊断信息：带上真实错误名与信息、文件大小、试过的所有方式，
+ * 方便把问题一次说清（用户会把这个弹窗整段发出来）。
  * @param {any} err
  * @param {File|Blob} file
  * @param {Uint8Array} bytes
+ * @param {string[]} [tried] 已尝试过的解析方式与各自失败原因
  * @returns {string}
  */
-function describePdfFailure(err, file, bytes) {
+function describePdfFailure(err, file, bytes, tried = []) {
   const name = (err && err.name) || 'Error';
   const msg = String((err && err.message) || err || '').slice(0, 120);
   const size = bytes ? `${(bytes.length / 1024).toFixed(0)} KB` : '未知大小';
@@ -491,21 +493,91 @@ function describePdfFailure(err, file, bytes) {
   if (/password/i.test(msg)) {
     hints.push('文件带密码保护，请先用 WPS / Adobe 去掉密码再导入。');
   }
+  if (/Setting up fake worker|worker/i.test(`${name} ${msg}`) && !tried.length) {
+    hints.push('解析用的后台线程没能启动（安卓 WebView 的常见问题），已自动改用主线程模式重试。');
+  }
 
   return (
     `「${fileName}」（${size}）打开失败。\n` +
     `真实错误：${name}: ${msg}\n` +
+    (tried.length ? `已尝试：\n· ${tried.join('\n· ')}\n` : '') +
     (hints.length ? '可能原因：\n· ' + hints.join('\n· ') + '\n' : '') +
     '把这段信息发给我即可定位。'
   );
 }
 
 /**
+ * 让 pdf.js 在主线程里跑（不创建 Web Worker）。
+ *
+ * 为什么需要：安卓 WebView 里 `new Worker('https://localhost/...')` 经常拿不到脚本
+ * （Capacitor 的本地资源拦截对 worker 请求不一定生效），于是 pdf.js 打开文档直接失败。
+ * pdf.js 内部会先看 `globalThis.pdfjsWorker.WorkerMessageHandler`，
+ * 有的话就完全跳过 Worker、改在主线程解析（见 PDFWorker._initialize 的实现）。
+ * 所以我们自己把 worker 模块 import 进主线程挂上去即可。
+ * @param {'modern'|'legacy'} variant 必须与当前使用的 pdf.js 构建一致
+ */
+async function enableMainThreadMode(variant) {
+  const workerUrl = variant === 'legacy' ? PDF_LEGACY_WORKER_URL : PDF_WORKER_URL;
+  const mod = await import(/* webpackIgnore: true */ workerUrl);
+  const handler = mod && (mod.WorkerMessageHandler || (mod.default && mod.default.WorkerMessageHandler));
+  if (!handler) {
+    throw new Error(`worker 模块里没有 WorkerMessageHandler：${workerUrl}`);
+  }
+  globalThis.pdfjsWorker = { WorkerMessageHandler: handler };
+  return handler;
+}
+
+/**
+ * 给 promise 加超时：worker 卡死时不能一直转圈，超时按失败处理（换个方式重试）。
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {string} label
+ * @returns {Promise<T>}
+ */
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} 超过 ${Math.round(ms / 1000)} 秒没有响应`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/** 是否是「文件内容本身不合法」这类结论性错误（重试别的解析方式也没用） */
+function isInvalidPdfError(err) {
+  const raw = `${(err && err.name) || ''} ${(err && err.message) || err || ''}`;
+  return /InvalidPDF|Invalid PDF structure/i.test(raw);
+}
+
+/** 上次成功的解析方式（记住它，下次直接用，省掉反复试错的时间） */
+const PDF_STRATEGY_KEY = 'quiz.pdfStrategy';
+
+/** @param {string} label @returns {string} */
+function loadSavedStrategy() {
+  try {
+    return globalThis.localStorage ? globalThis.localStorage.getItem(PDF_STRATEGY_KEY) || '' : '';
+  } catch {
+    return '';
+  }
+}
+
+/** @param {string} label */
+function saveStrategy(label) {
+  try {
+    if (globalThis.localStorage) globalThis.localStorage.setItem(PDF_STRATEGY_KEY, label);
+  } catch {
+    /* 存不了就算了 */
+  }
+}
+
+/**
  * 解析 .pdf → 文本行（每页一个 1 起的行号序列）。
  *
- * 先用 pdf.js 标准构建，失败就自动换 legacy（兼容版）重试一次 ——
- * 部分安卓机的 WebView 打开现代构建会抛 InvalidPDFException 之类
- * 与文件无关的错误，换 legacy 后正常。
+ * 依次尝试 4 种组合，哪种能跑通就用哪种（安卓 WebView 的兼容问题主要靠「主线程模式」解决）：
+ *   ① 标准版 + 多线程   ② 兼容版 + 多线程   ③ 标准版 + 主线程   ④ 兼容版 + 主线程
+ * 上次成功的那种会被记住，并在下次优先尝试。
  * @param {File|Blob} file
  * @param {string[]} warnings
  * @returns {Promise<Array<{page:number,line:number,para:number,text:string}>>}
@@ -514,40 +586,58 @@ async function extractPdf(file, warnings) {
   const bytes = await readFileBytes(file, 'PDF');
   assertLooksLikePdf(bytes, file);
 
-  const variants = ['modern', 'legacy'];
-  let lastError = null;
+  const strategies = [
+    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
+    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 15000 },
+    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 60000 },
+    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 60000 },
+  ];
 
-  for (let i = 0; i < variants.length; i += 1) {
-    const variant = variants[i];
+  // 上次成功的那一种排到最前面（例如这台手机必须用主线程模式）
+  const saved = loadSavedStrategy();
+  if (saved) {
+    const idx = strategies.findIndex((s) => s.label === saved);
+    if (idx > 0) strategies.unshift(strategies.splice(idx, 1)[0]);
+  }
+
+  let lastError = null;
+  const tried = [];
+  let contentInvalid = false;
+
+  for (let i = 0; i < strategies.length; i += 1) {
+    const strategy = strategies[i];
+
+    // 已经判定「文件结构不合法」两次以上 → 是文件本身的问题，别再耗时间
+    if (contentInvalid && tried.length >= 2) break;
+
     let pdfjsLib;
     try {
-      pdfjsLib = await loadPdfLib(variant);
+      pdfjsLib = await loadPdfLib(strategy.variant);
     } catch (err) {
       lastError = err;
-      if (i < variants.length - 1) {
-        warnings.push('PDF 解析库（标准版）加载失败，已自动改用兼容版重试。');
-        continue;
-      }
-      throw err;
+      tried.push(`${strategy.label}：解析库加载失败（${String(err && err.message).slice(0, 40)}）`);
+      continue;
     }
 
     try {
-      const lines = await readPdfDocument(pdfjsLib, bytes, warnings);
-      if (i > 0) warnings.push('已自动改用 PDF 解析库兼容版完成解析。');
+      const lines = await readPdfDocument(pdfjsLib, bytes, warnings, strategy);
+      saveStrategy(strategy.label);
+      if (tried.length) {
+        warnings.push(`已改用「${strategy.label}」模式完成解析（前 ${tried.length} 种方式未成功）。`);
+      }
       return lines;
     } catch (err) {
-      // 扫描版、加密这类「结论性」错误直接抛给用户，不做无谓的重试
+      // 扫描版 / 加密 这类结论性错误直接抛给用户，不做无谓重试
       if (err instanceof ExtractError) throw err;
       lastError = err;
-      console.warn(`[extract] pdf.js(${variant}) 打开文档失败（原始错误）:`, err);
-      if (i < variants.length - 1) {
-        warnings.push('标准版解析失败，已自动改用兼容版重试。');
-      }
+      if (isInvalidPdfError(err)) contentInvalid = true;
+      console.warn(`[extract] PDF 解析失败（${strategy.label}，原始错误）:`, err);
+      tried.push(`${strategy.label}：${String((err && err.message) || err).slice(0, 60)}`);
     }
   }
 
   console.warn('[extract] PDF 解析最终失败（原始错误）:', lastError);
-  throw new ExtractError(describePdfFailure(lastError, file, bytes));
+  throw new ExtractError(describePdfFailure(lastError, file, bytes, tried));
 }
 
 /**
@@ -555,8 +645,16 @@ async function extractPdf(file, warnings) {
  * @param {any} pdfjsLib 已设置好 workerSrc 的 pdf.js 命名空间
  * @param {Uint8Array} sourceBytes 原始字节（内部会复制，因为 pdf.js 会把 buffer 转移给 worker）
  * @param {string[]} warnings
+ * @param {{variant?:'modern'|'legacy', mainThread?:boolean, label?:string, timeout?:number}} [strategy]
  */
-async function readPdfDocument(pdfjsLib, sourceBytes, warnings) {
+async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}) {
+  const { variant = 'modern', mainThread = false, label = 'PDF', timeout = 60000 } = strategy;
+
+  if (mainThread) {
+    // 必须在 getDocument 之前挂好，pdf.js 创建 PDFWorker 时会检查它
+    await enableMainThreadMode(variant);
+  }
+
   // 必须复制：pdf.js 会把这份 ArrayBuffer transfer 给 worker，之后再读会是空的
   const data = sourceBytes.slice();
 
@@ -570,8 +668,13 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings) {
 
   let pdf;
   try {
-    pdf = await task.promise;
+    pdf = await withTimeout(task.promise, timeout, label);
   } catch (err) {
+    try {
+      await task.destroy();
+    } catch (ignored) {
+      /* 清理失败无所谓 */
+    }
     const raw = String(err && err.message ? err.message : err);
     if (/password/i.test(raw)) {
       throw new ExtractError('该 PDF 已加密，需要输入密码才能打开，请先解除密码保护再导入。');

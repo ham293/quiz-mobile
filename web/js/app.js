@@ -5,7 +5,7 @@
 import * as repo from './bank.js';
 import { extractLines } from './extract.js';
 import { parseLines } from './parser-text.js';
-import { confirmDialog, el, loading, mount, toast } from './ui/common.js';
+import { closeSheet, confirmDialog, el, loading, mount, openSheet, toast } from './ui/common.js';
 
 /** 屏幕路由表 */
 const ROUTES = {
@@ -165,6 +165,47 @@ export function pickFile() {
 }
 
 /**
+ * 导入/解析失败时弹出**可复制**的详情。
+ * 以前只用 toast，几秒后就消失了，用户根本来不及看或截图，排查只能靠猜。
+ * @param {string} title
+ * @param {string} detail
+ */
+export function showErrorDetail(title, detail) {
+  const text = String(detail || '（无详细信息）');
+  const body = el('div', {}, [
+    el('h3.card-title', { text: title || '出错了' }),
+    el('pre.pre-wrap.mono', {
+      style: {
+        maxHeight: '46vh',
+        overflow: 'auto',
+        background: 'var(--bg)',
+        padding: '10px',
+        borderRadius: '10px',
+        fontSize: '12px',
+        margin: '0',
+      },
+      text,
+    }),
+    el('div.grid2.mt12', {}, [
+      el('button.btn', { type: 'button', text: '知道了', onclick: () => closeSheet() }),
+      el('button.btn.primary', {
+        type: 'button',
+        text: '复制这段信息',
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(text);
+            toast('已复制，发给开发者即可定位');
+          } catch {
+            toast('复制失败，请长按上面的文字手动选择');
+          }
+        },
+      }),
+    ]),
+  ]);
+  openSheet(body);
+}
+
+/**
  * 导入题库文件（解析 → 保存 → 载入）。
  * @param {File} file
  * @param {{name?:string, overwrite?:boolean}} [opts]
@@ -178,7 +219,15 @@ export async function importFile(file, opts = {}) {
     const { lines } = await extractLines(file);
     const parsed = parseLines(lines, bankName);
     if (!parsed.questions.length) {
-      toast('没有解析出任何题目，请检查文件是否为文字版');
+      loading(false);
+      showErrorDetail(
+        '没有解析出题目',
+        `文件「${file.name}」读到了 ${lines.length} 行文本，但一道题也没识别出来。\n\n` +
+          '常见原因：\n' +
+          '· 是扫描版/图片版 PDF（没有文字层），本程序不做 OCR；\n' +
+          '· 题目格式比较特殊（例如选项没有 A/B/C/D 前缀、答案单独放在别处）。\n\n' +
+          `解析统计：\n${typeof parsed.summary === 'function' ? parsed.summary() : JSON.stringify(parsed.warnings || [])}`,
+      );
       return null;
     }
     if (!opts.overwrite) {
@@ -207,7 +256,9 @@ export async function importFile(file, opts = {}) {
     return state.bank;
   } catch (err) {
     console.error(err);
-    toast(err && err.message ? err.message : '导入失败', 3200);
+    loading(false);
+    // 详细错误用可复制的弹窗展示（toast 一闪而过，用户来不及截图）
+    showErrorDetail('导入失败', err && err.message ? err.message : String(err));
     return null;
   } finally {
     loading(false);

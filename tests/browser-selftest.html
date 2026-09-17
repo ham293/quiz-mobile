@@ -192,7 +192,34 @@
         check('示例题库能一键导入', false, String(e.message).slice(0, 80));
       }
 
-      /* 9. 数据落盘检查 */
+      /* 9. 验证「不创建 Worker 的主线程模式」真的有效（安卓 WebView 的兜底手段） */
+      try {
+        const OrigWorker = window.Worker;
+        let workerUsed = 0;
+        window.Worker = class {
+          constructor() {
+            workerUsed += 1;
+            throw new Error('模拟：WebView 里 Worker 不可用');
+          }
+        };
+        try {
+          // 预先在主线程挂上 worker 模块（等价于 extract.js 的 enableMainThreadMode 效果）
+          const wmod = await import('../web/vendor/pdf.worker.min.mjs');
+          globalThis.pdfjsWorker = { WorkerMessageHandler: wmod.WorkerMessageHandler };
+          const r2 = await extractLines(new File([pdfBlob], '主线程模式.pdf', { type: 'application/pdf' }));
+          check(
+            '挂上 pdfjsWorker 后完全不创建 Worker 也能解析',
+            workerUsed === 0 && r2.lines.length > 20,
+            `Worker 调用次数=${workerUsed}，解析 ${r2.lines.length} 行`,
+          );
+        } finally {
+          window.Worker = OrigWorker;
+        }
+      } catch (e) {
+        check('挂上 pdfjsWorker 后完全不创建 Worker 也能解析', false, String(e.message).slice(0, 90));
+      }
+
+      /* 10. 数据落盘检查 */
       const banks = await repo.listBanks();
       check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
       check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);
