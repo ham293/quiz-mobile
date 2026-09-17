@@ -30,8 +30,10 @@
   <div id="sheet" class="sheet-mask hidden"><div class="sheet" id="sheet-body"></div></div>
   <div id="loading" class="loading hidden"><div class="spinner"></div><div id="loading-text">处理中…</div></div>
 
-  <!-- 隐藏的文件选择器：导入题库用 -->
-  <input id="file-input" type="file" accept=".docx,.pdf,.txt,.md" class="hidden" />
+  <!-- 隐藏的文件选择器：导入题库用（同时给出扩展名与 MIME，兼容各家安卓文件选择器） -->
+  <input id="file-input" type="file"
+         accept=".docx,.pdf,.txt,.md,application/pdf,text/plain,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+         class="hidden" />
 
   <!--
     离线第三方库（由 `npm run vendor` 从 node_modules 拷到 web/vendor/）：

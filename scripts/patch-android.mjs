@@ -96,6 +96,29 @@ function readdirSyncSafe(dir) {
   }
 }
 
+const MANIFEST = resolve(ANDROID, 'app/src/main/AndroidManifest.xml');
+
+/**
+ * 可选：去掉 INTERNET 权限（本应用完全离线，不需要联网）。
+ * 默认**不**去掉 —— Capacitor 的 WebView 默认从 https://localhost 加载本地资源，
+ * 保留该权限最保险；确认自己的设备上没问题后，可以用 `--strip-internet` 生成无网络权限的包。
+ */
+function stripInternetPermission() {
+  if (!existsSync(MANIFEST)) {
+    console.warn(`跳过权限处理（找不到 ${MANIFEST}）`);
+    return;
+  }
+  let xml = readFileSync(MANIFEST, 'utf8');
+  const before = xml;
+  xml = xml.replace(/\s*<uses-permission[^>]*android\.permission\.INTERNET[^>]*\/>/g, '');
+  if (xml === before) {
+    console.log('未找到 INTERNET 权限（可能已移除）');
+    return;
+  }
+  writeFileSync(MANIFEST, xml, 'utf8');
+  console.log('已移除 INTERNET 权限（应用完全离线）');
+}
+
 function main() {
   const revert = process.argv.includes('--revert');
   if (!existsSync(GRADLE)) {
@@ -108,6 +131,7 @@ function main() {
 
   if (!revert) {
     applyIcons();
+    if (process.argv.includes('--strip-internet')) stripInternetPermission();
     if (!existsSync(KEYSTORE)) {
       console.error(`找不到密钥库：${KEYSTORE}`);
       console.error('可执行 python tools/make_keystore.py 生成，或改用默认 debug 签名（加 --revert）。');
