@@ -4,6 +4,21 @@
 
 仓库自带 GitHub Actions 工作流：**推代码 → 云端自动构建 → 下载 APK 安装**，不需要本地装 Android SDK。
 
+## 📥 直接下载安装（已构建好的 APK）
+
+| 版本 | 说明 | 下载 |
+| --- | --- | --- |
+| `app-release.apk`（5.4 MB） | 推荐，体积更小 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-release.apk) |
+| `app-debug.apk`（6.5 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-debug.apk) |
+
+> **手机网络打不开 github.com 下载链接时**（国内常见），在下载地址前面加一个加速前缀即可，例如：
+> `https://ghfast.top/https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-release.apk`
+> 也可以去仓库的 **Actions → 最新一次运行 → Artifacts** 下载 `刷题助手-APK`。
+
+安装步骤：手机浏览器下载 → 点开 APK → 系统提示「未知来源」时允许安装（小米/华为/OPPO 的入口在「设置 → 应用 → 特殊权限」里）→ 桌面出现「刷题助手」。
+两个 APK 用的是同一把签名密钥，以后重新构建的版本都能**直接覆盖安装升级**，不会丢数据。
+
+
 <p align="center">
   <img src="docs/screenshots/banks.png" width="180" alt="题库">
   <img src="docs/screenshots/practice.png" width="180" alt="练习">
@@ -14,21 +29,19 @@
 
 ---
 
-## 一、怎么拿到 APK（3 步）
+## 一、自己重新构建（推送即构建）
 
 1. **推送到 GitHub**（推到 `main` 分支会自动触发构建）：
    ```bash
-   git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-   git push -u origin main
+   git push origin main
    ```
 2. **等云构建**：打开仓库页面的 **Actions → 构建 APK**，约 5～10 分钟（首次会久一些）。
 3. **下载安装**：
    - 日常做法：进 **Actions** → 点最新一次运行 → 页面底部 **Artifacts** → 下载 `刷题助手-APK`（zip 里是 `app-debug.apk` / `app-release.apk`）。
-   - 更方便的做法：在仓库打一个 tag（如 `v1.0.0`）并推送，工作流会把 APK 直接发布到 **Releases**：
+   - 更方便的做法：打 tag 并推送，工作流会把 APK 直接发布到 **Releases**（本项目已发布 v1.0.0）：
      ```bash
-     git tag v1.0.0 && git push origin v1.0.0
+     git tag v1.0.1 && git push origin v1.0.1
      ```
-     然后**用手机浏览器打开 Release 页面**直接下载安装，省去电脑中转。
    - 手机首次安装需要允许「安装未知来源应用」（系统会弹提示，跟着点即可）。
 
 > 也可以手动触发：**Actions → 构建 APK → Run workflow**。
@@ -97,6 +110,7 @@ cd android && ./gradlew assembleDebug
 | 浏览器端自测（headless Chrome，真实渲染） | 28 项全通过：应用启动、docx 真实解析、练习作答反馈、「下一题」、9 个页面渲染无异常、练习报告、**真实导出 PDF（115 KB）**、IndexedDB 落盘、艾宾浩斯到期 |
 | 界面截图 | `docs/screenshots/` 11 张（题库/练习/答题/报告/错题/收藏/统计/日志/补录/设置/关于） |
 | 与桌面版对拍 | 同一份样本，Python 版与 JS 版解析出的 questions/skipped/errors 结构完全一致 |
+| 已构建 APK 校验 | 下载 Release 里的 `app-release.apk` 逐个核对：659 个文件、`assets/public/**` 前端资源与 vendor 离线库全部就位、`classes.dex`/`resources.arsc`/`AndroidManifest.xml` 齐全、包名 `com.ham293.quizmobile`、**APK Signature Scheme v2/v3 与 v1 签名均存在且证书为本仓库的密钥库**（保证可覆盖升级） |
 
 自动化测试文件：`tests/core.test.mjs`、`tests/parser-text.test.mjs`、`tests/exporter.test.mjs`、`tests/pipeline.test.mjs`；浏览器自测页 `tests/browser-selftest.html`、截图工具 `tests/shoot.mjs`。
 
