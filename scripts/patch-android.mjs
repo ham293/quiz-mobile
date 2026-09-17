@@ -131,7 +131,7 @@ function main() {
 
   if (!revert) {
     applyIcons();
-    syncVersion(text);
+    text = syncVersion(text); // 注意要接住返回值，否则改动会丢掉
     if (process.argv.includes('--strip-internet')) stripInternetPermission();
     if (!existsSync(KEYSTORE)) {
       console.error(`找不到密钥库：${KEYSTORE}`);
