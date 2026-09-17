@@ -8,15 +8,25 @@
 
 | 版本 | 说明 | 下载 |
 | --- | --- | --- |
-| `app-release.apk`（5.4 MB） | 推荐，体积更小 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-release.apk) |
-| `app-debug.apk`（6.5 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-debug.apk) |
+| `app-release.apk`（6.0 MB） | **推荐**，v1.0.2 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.2/app-release.apk) |
+| `app-debug.apk`（7.1 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.0.2/app-debug.apk) |
 
 > **手机网络打不开 github.com 下载链接时**（国内常见），在下载地址前面加一个加速前缀即可，例如：
-> `https://ghfast.top/https://github.com/ham293/quiz-mobile/releases/download/v1.0.0/app-release.apk`
+> `https://ghproxy.net/https://github.com/ham293/quiz-mobile/releases/download/v1.0.2/app-release.apk`
+> （`https://ghfast.top/`、`https://gh-proxy.com/` 效果相同，哪个通用哪个）
 > 也可以去仓库的 **Actions → 最新一次运行 → Artifacts** 下载 `刷题助手-APK`。
 
 安装步骤：手机浏览器下载 → 点开 APK → 系统提示「未知来源」时允许安装（小米/华为/OPPO 的入口在「设置 → 应用 → 特殊权限」里）→ 桌面出现「刷题助手」。
-两个 APK 用的是同一把签名密钥，以后重新构建的版本都能**直接覆盖安装升级**，不会丢数据。
+历次版本用的是同一把签名密钥，可以直接**覆盖安装升级**，不会丢题库数据。
+
+### 导入失败怎么办
+
+1. 先在首页点 **「导入示例题库」**：示例能导进来 → 程序没问题，是个别文件的格式/内容问题；示例也失败 → 把报错发我。
+2. 报错弹窗里现在会带上**真实错误信息**（错误名、文件大小、可能原因），直接截图发出来即可定位。
+3. 最常见的两种原因：
+   - **文件只读到一半**：从微信 / QQ / 网盘里直接选文件时经常这样。先「用其他应用打开 → 保存到手机文件」，再从本地导入。
+   - **PDF 被加密或限制编辑**：先用 WPS / Adobe 去掉密码或权限限制（另存为一份新 PDF）再导入。
+
 
 
 <p align="center">
