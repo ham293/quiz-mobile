@@ -183,7 +183,16 @@
         check('损坏 PDF 报出真实错误并自动尝试兼容版', /真实错误/.test(e.message), String(e.message).replace(/\n/g, ' | ').slice(0, 90));
       }
 
-      /* 8. 数据落盘检查 */
+      /* 8. 示例题库按钮（APK 里的 assets 路径 + 中文题库名） */
+      try {
+        const summary = await app.importSamples();
+        const bank = await repo.getBank('示例题库（PDF 版）');
+        check('示例题库能一键导入', !!bank && bank.questions.length === 6, summary);
+      } catch (e) {
+        check('示例题库能一键导入', false, String(e.message).slice(0, 80));
+      }
+
+      /* 9. 数据落盘检查 */
       const banks = await repo.listBanks();
       check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
       check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);

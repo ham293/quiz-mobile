@@ -258,9 +258,11 @@ export function startSession(questions, mode) {
  * @returns {Promise<string>} 结果摘要
  */
 export async function importSamples() {
+  // 文件名必须是 ASCII：中文文件名打进 APK 的 assets 里可能取不到（zip 条目不带 UTF-8 标记），
+  // 中文题库名通过 opts.name 单独传。
   const samples = [
-    { path: '../samples/示例题库.docx', name: '示例题库.docx' },
-    { path: '../samples/示例题库.pdf', name: '示例题库.pdf' },
+    { path: '../samples/sample-bank.docx', file: 'sample-bank.docx', name: '示例题库（Word 版）' },
+    { path: '../samples/sample-bank.pdf', file: 'sample-bank.pdf', name: '示例题库（PDF 版）' },
   ];
   const results = [];
   loading('正在导入示例题库…');
@@ -274,8 +276,8 @@ export async function importSamples() {
           continue;
         }
         const blob = await resp.blob();
-        const file = new File([blob], item.name, { type: blob.type || 'application/octet-stream' });
-        const bank = await importFile(file, { overwrite: true });
+        const file = new File([blob], item.file, { type: blob.type || 'application/octet-stream' });
+        const bank = await importFile(file, { overwrite: true, name: item.name });
         results.push(bank ? `${item.name}：${bank.questions.length} 题` : `${item.name}：未解析出题目`);
       } catch (err) {
         results.push(`${item.name}：${err && err.message ? err.message : err}`);
