@@ -219,7 +219,39 @@
         check('挂上 pdfjsWorker 后完全不创建 Worker 也能解析', false, String(e.message).slice(0, 90));
       }
 
-      /* 10. 数据落盘检查 */
+      /* 10. 知识点自动出题页面 + 纯逻辑生成 */
+      try {
+        const gen = await import('../web/js/generator.js');
+        const knowledge = [
+          '第一章 中国近代史',
+          '1840年，英国发动了鸦片战争，中国开始沦为半殖民地半封建社会。',
+          '1851年，洪秀全领导了太平天国运动，沉重打击了清王朝的统治。',
+          '1894年，日本发动甲午中日战争，清政府战败并签订了《马关条约》。',
+          '1911年，辛亥革命推翻了清王朝的统治，结束了中国两千多年的封建君主专制制度。',
+          '1919年，五四运动标志着新民主主义革命的开端。',
+          '1921年，中国共产党第一次全国代表大会在上海召开，标志着中国共产党的成立。',
+          '1937年，日本发动卢沟桥事变，中国全民族抗战由此开始。',
+          '1949年，中华人民共和国成立，标志着新民主主义革命取得了伟大胜利。',
+          '1956年，三大改造基本完成，社会主义制度在中国基本建立起来。',
+        ];
+        const out = gen.generateQuestions(knowledge, { types: ['fill', 'choice', 'judge'], count: 20 });
+        check('知识点能自动生成题目', out.questions.length >= 6, `生成 ${out.questions.length} 题 / ${out.sentences} 句`);
+        const hasAnswer = out.questions.every((q) => q.answer && q.stem && q.options);
+        check('每道生成题都带参考答案与选项', hasAnswer, JSON.stringify(out.questions[0] || {}).slice(0, 80));
+        const kinds = {};
+        out.questions.forEach((q) => { kinds[q.qtype] = (kinds[q.qtype] || 0) + 1; });
+        check('生成的题型分布合理', Object.keys(kinds).length >= 1, JSON.stringify(kinds));
+
+        const app2 = app;
+        await app2.navigate('generate', {}, { push: false });
+        await sleep(300);
+        const text = document.getElementById('screen').textContent.trim();
+        check('知识点出题页面能渲染', text.length > 20, text.slice(0, 40));
+      } catch (e) {
+        check('知识点能自动生成题目', false, String(e.message).slice(0, 100));
+      }
+
+      /* 11. 数据落盘检查 */
       const banks = await repo.listBanks();
       check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
       check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);

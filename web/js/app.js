@@ -13,6 +13,7 @@ const ROUTES = {
   practice: { mod: () => import('./ui/practice.js'), fn: 'renderPractice', title: '练习', tab: 'practice' },
   session: { mod: () => import('./ui/practice.js'), fn: 'renderSession', title: '练习中', tab: 'practice' },
   report: { mod: () => import('./ui/practice.js'), fn: 'renderReport', title: '练习报告', tab: 'practice' },
+  generate: { mod: () => import('./ui/generate.js'), fn: 'renderGenerate', title: '知识点出题', tab: 'practice' },
   wrong: { mod: () => import('./ui/wrong.js'), fn: 'renderWrong', title: '错题本', tab: 'wrong' },
   favorites: { mod: () => import('./ui/wrong.js'), fn: 'renderFavorites', title: '收藏本', tab: 'wrong' },
   stats: { mod: () => import('./ui/stats.js'), fn: 'renderStats', title: '统计', tab: 'stats' },

@@ -30,3 +30,7 @@ __pycache__/
 tests/browser-result.json
 tests/browser-result.html
 tests/shots/
+
+# 开发过程中的临时脚本与样例（不属于产品代码）
+tmp-*
+tmp-*/

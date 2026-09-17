@@ -66,6 +66,14 @@ export async function renderBanks(root) {
   }
 
   children.push(
+    el('button.btn.block.mb8', {
+      type: 'button',
+      text: '🧩 知识点自动出题',
+      onclick: () => navigate('generate'),
+    }),
+  );
+
+  children.push(
     el('div.row.mt12', {}, [
       el('button.btn.grow', { type: 'button', text: '导入新题库', onclick: () => onImport(root) }),
       el('button.btn', {

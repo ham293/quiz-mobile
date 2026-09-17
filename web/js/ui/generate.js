@@ -267,24 +267,25 @@ function resultCard(root) {
 
 /** 单条预览 */
 function previewItem(q, index, root) {
-  const isJudge = q.qtype === '判断';
+  const optionCount = Object.keys(q.options || {}).length;
+  const label = q.qtype === '判断' ? '判断题' : optionCount > 1 ? '选择题' : '填空题';
   const rows = [
     el('div.row.between', {}, [
-      el('span.pill', { text: isJudge ? '判断题' : '单选题' }),
+      el('span.pill', { text: label }),
       el('span.tiny.muted', { text: `第 ${index + 1} 题${q.line ? ` · 第 ${q.line} 行` : ''}` }),
     ]),
     el('div.small.mt8.pre-wrap', { text: q.stem }),
     el('div.tiny.muted.mt8', { text: `参考答案：${answerTextOf(q)}` }),
   ];
 
-  if (!isJudge && Object.keys(q.options).length > 1) {
+  if (optionCount > 1) {
     rows.push(
       el('p.tiny.muted.mt8.pre-wrap', {
         text: `选项：${Object.entries(q.options).map(([k, v]) => `${k}．${v}`).join('　')}`,
       }),
     );
   }
-  rows.push(el('p.tiny.muted.mt8.pre-wrap', { text: `出处：${q.explanation.replace(/\n/g, ' ')}` }));
+  rows.push(el('p.tiny.muted.mt8.pre-wrap', { text: `出处：${q.raw}` }));
 
   return el('div.list-item', {}, [
     el('div.grow', {}, rows),
@@ -417,9 +418,9 @@ async function runGenerate(root) {
     if (!view.name) view.name = defaultBankName(view.fileName);
     toast(
       result.questions.length
-        ? `生成 ${result.questions.length} 题（${summarizeGenerated(result)}）`
+        ? summarizeGenerated(result)
         : '没有生成题目，看看下面的提示',
-      3200,
+      3600,
     );
   } catch (err) {
     console.warn('[generate] 出题失败：', err);
