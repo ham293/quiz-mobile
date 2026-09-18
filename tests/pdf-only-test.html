@@ -8,6 +8,8 @@
   const out = document.getElementById('out');
   const payload = { ok: false, error: '未开始' };
   try {
+    // 与 App 一致：先加载 polyfill（补齐旧 WebView 缺失的 API）
+    await import('../web/js/polyfills.js');
     const { extractLines } = await import('../web/js/extract.js');
     const blob = await (await fetch('../tests/fixtures/sample-questions.pdf')).blob();
     const file = new File([blob], 'sample-questions.pdf', { type: 'application/pdf' });
@@ -23,6 +25,15 @@
   }
   window.__result = payload;
   out.textContent = JSON.stringify(payload, null, 2);
+  // 回传给本地测试服务器（tests/result_server.py），方便在指定浏览器版本下自动化验证
+  try {
+    await fetch('/__result', {
+      method: 'POST',
+      body: JSON.stringify({ kind: 'pdf-only', ua: navigator.userAgent, ...payload }),
+    });
+  } catch {
+    /* 没有服务器就忽略 */
+  }
 </script>
 </body>
 </html>

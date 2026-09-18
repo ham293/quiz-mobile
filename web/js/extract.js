@@ -665,6 +665,28 @@ function isNativePlatform() {
   }
 }
 
+/** 引擎主版本号（Chrome/WebView 的 UA 里带 Chrome/xxx） */
+function engineMajorVersion() {
+  try {
+    const ua = globalThis.navigator ? globalThis.navigator.userAgent : '';
+    const m = /Chrome\/(\d+)/.exec(ua);
+    return m ? Number(m[1]) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * 老引擎（Chrome < 124）上优先用 pdf.js 的 legacy 构建。
+ * 原因：现代构建依赖 Promise.try(128) / ReadableStream 异步迭代(124) 等新 API，
+ * 在老 WebView 上即使补了 polyfill 也可能卡住不返回 —— 实测 Chrome 116：
+ * 现代构建 20 秒无响应，legacy 构建一次成功。直接用 legacy 又稳又快。
+ */
+function shouldPreferLegacy() {
+  const v = engineMajorVersion();
+  return v > 0 && v < 124;
+}
+
 /**
  * 解析 .pdf → 文本行（每页一个 1 起的行号序列）。
  *
@@ -694,12 +716,24 @@ async function extractPdf(file, warnings, onProgress) {
   assertLooksLikePdf(bytes, file);
   report({ stage: '正在解析 PDF 结构' });
 
-  const strategies = [
-    { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 20000 },
-    { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 20000 },
-    { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 45000 },
-    { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 45000 },
-  ];
+  // 老引擎（Chrome < 124）先用 legacy 构建；否则先试现代构建
+  const preferLegacy = shouldPreferLegacy();
+  const strategies = preferLegacy
+    ? [
+        { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 25000 },
+        { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 45000 },
+        { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 15000 },
+        { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 45000 },
+      ]
+    : [
+        { variant: 'modern', mainThread: false, label: '标准版+多线程', timeout: 20000 },
+        { variant: 'legacy', mainThread: false, label: '兼容版+多线程', timeout: 20000 },
+        { variant: 'modern', mainThread: true, label: '标准版+主线程', timeout: 45000 },
+        { variant: 'legacy', mainThread: true, label: '兼容版+主线程', timeout: 45000 },
+      ];
+  if (preferLegacy) {
+    warnings.push(`检测到较旧的浏览器内核（Chrome/${engineMajorVersion()}），已直接使用 PDF 兼容版解析。`);
+  }
 
   // 上次成功的那一种排到最前面（例如这台手机必须用主线程模式）
   const saved = loadSavedStrategy();
