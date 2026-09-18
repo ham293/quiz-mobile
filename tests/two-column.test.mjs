@@ -11,11 +11,12 @@ import { groupTextItemsIntoLines, splitItemsByColumns } from '../web/js/extract.
 import { parseLines } from '../web/js/parser-text.js';
 
 const PDF = fileURLToPath(new URL('./fixtures/two-column.pdf', import.meta.url));
+const PDF_TIGHT = fileURLToPath(new URL('./fixtures/two-column-tight.pdf', import.meta.url));
 const CMAPS = fileURLToPath(new URL('../web/vendor/cmaps/', import.meta.url)) + '/';
 
-async function pageItems() {
+async function pageItems(path = PDF) {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const data = new Uint8Array(readFileSync(PDF));
+  const data = new Uint8Array(readFileSync(path));
   const doc = await pdfjs.getDocument({
     data,
     useSystemFonts: false,
@@ -74,4 +75,40 @@ test('双栏 PDF：切题结果里题干不再带着别的题的文字', async (
   for (const q of withOptions) {
     assert.ok(!/A\.\s*\S+\s+B\./.test(q.stem), `题干混入了选项：${q.stem}`);
   }
+});
+
+test('挤在一起的双栏（无整页空白带）：靠逐行间隙也能分开', async () => {
+  const items = await pageItems(PDF_TIGHT);
+  const naive = groupTextItemsIntoLines(items);
+  // 这种情况整页没有贯通空白带，左边的某些行横跨到了页中间
+  assert.ok(
+    naive.some((l) => l.includes('单选题') && l.includes('多选题')),
+    '不分栏时应能看到左右栏被拼在一起',
+  );
+
+  const columns = splitItemsByColumns(items);
+  assert.equal(columns.length, 2, '即使没有整页空白带，也应靠逐行间隙判定为 2 栏');
+
+  const texts = columns.map((col) => groupTextItemsIntoLines(col));
+  const all = texts.flat();
+  assert.equal(
+    all.filter((l) => l.includes('单选题') && l.includes('多选题')).length,
+    0,
+    `分栏后不应再有合并行：${JSON.stringify(all.filter((l) => l.includes('单选题') && l.includes('多选题')))}`,
+  );
+  assert.match(texts[0][0], /单选题/, `左栏首行：${texts[0][0]}`);
+  assert.match(texts[1][0], /多选题/, `右栏首行：${texts[1][0]}`);
+
+  // 逐题检查：题干里不能再出现「A. xxx  A. yyy」这种两栏选项被拼起来的情况
+  const lines = [];
+  for (const col of columns) {
+    groupTextItemsIntoLines(col)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .forEach((text, i) => lines.push({ page: 1, line: i + 1, para: 0, text }));
+  }
+  const parsed = parseLines(lines, '挤栏测试');
+  const badStem = parsed.questions.find((q) => (q.stem.match(/[A-H]\./g) || []).length >= 2);
+  assert.ok(!badStem, `题干里混入多个选项标记：${badStem ? badStem.stem.slice(0, 60) : ''}`);
+  assert.ok(parsed.questions.length >= 4, `应解析出至少 4 题，实际 ${parsed.questions.length}`);
 });

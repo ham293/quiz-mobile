@@ -28,6 +28,20 @@ import { confirmDialog, el, kv, loading, mount, toast } from './common.js';
 let draft = null;
 
 /**
+ * 各服务商的常用模型名候选（点一下填入输入框）。
+ * 模型名偶尔会改名/下线（尤其免费模型），所以做成「候选 + 可手改」，
+ * 实在不通就点「测试连接」看服务商返回的原始错误。
+ */
+const MODEL_CANDIDATES = {
+  zhipu: ['glm-4-flash', 'glm-4.5-flash', 'glm-4-air', 'glm-4-plus'],
+  moonshot: ['moonshot-v1-8k', 'moonshot-v1-32k', 'kimi-k2-0711-preview'],
+  doubao: ['doubao-pro-32k', 'doubao-lite-32k'],
+  deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+  siliconflow: ['Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct', 'THUDM/glm-4-9b-chat'],
+  custom: [],
+};
+
+/**
  * 渲染 AI 识别设置页。
  * @param {HTMLElement} root 挂载点
  * @param {{reload?:boolean}} [params] reload=true 时强制从本地设置重新读取
@@ -183,6 +197,29 @@ function paramCard(root) {
     },
   });
 
+  /* --- 模型名候选：点一下就填进输入框，省得记模型名 --- */
+  const modelHint = el('div.chips.mt8');
+  const fillModelHint = () => {
+    const candidates = MODEL_CANDIDATES[draft.provider] || [];
+    modelHint.textContent = '';
+    if (!candidates.length) return;
+    modelHint.appendChild(el('span.tiny.muted', { text: '常用模型：' }));
+    for (const m of candidates) {
+      modelHint.appendChild(
+        el('button.chip.sm', {
+          type: 'button',
+          text: m,
+          onclick: () => {
+            draft.model = m;
+            modelInput.value = m;
+            toast(`已填入模型：${m}`);
+          },
+        }),
+      );
+    }
+  };
+  fillModelHint();
+
   /* --- 测试连接 --- */
   const resultNode = el('p.tiny.pre-wrap.mt8.hidden');
   const testBtn = el('button.btn.block.mt8', {
@@ -251,7 +288,8 @@ function paramCard(root) {
     el('h3.card-title', { text: '参数' }),
     field('API Key', el('div.row', {}, [el('div.grow', {}, [keyInput]), toggleBtn]), '只保存在本机浏览器（localStorage），不会写进题库，也不会出现在日志里。'),
     field('Base URL（接口地址）', baseUrlInput, '末尾不要加 /chat/completions，程序会自己拼接。'),
-    field('模型名', modelInput),
+    field('模型名', modelInput, '模型名偶尔会改名或下线（免费模型尤其如此），不通就先点下面的「测试连接」看服务商返回的原始错误。'),
+    modelHint,
     field('分块字符数', chunkInput, '默认 6000。太大容易超时/超出上下文，太小会多花请求次数与额度。'),
     testBtn,
     resultNode,

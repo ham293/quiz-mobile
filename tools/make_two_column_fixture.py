@@ -70,19 +70,29 @@ RIGHT_COLUMN = [
 def main() -> None:
     pdfmetrics.registerFont(UnicodeCIDFont(FONT))
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    c = canvas.Canvas(str(OUT), pagesize=A4)
-    c.setFont(FONT, 10.5)
+    _write(OUT, LEFT_COLUMN, RIGHT_COLUMN, "标准双栏（有整页空白带）")
 
-    for i, text in enumerate(LEFT_COLUMN):
+    # 第二份：左栏若干行写得很长，横跨到页中间 —— 整页空白带被截断，
+    # 只能靠「逐行间隙聚类」判分栏（用户那份 PDF 就是这种情况）
+    tight = ROOT / "tests" / "fixtures" / "two-column-tight.pdf"
+    left_tight = list(LEFT_COLUMN)
+    left_tight[1] = "1、[2分] 1943年1月，美英分别与中国签订新约，废除在华的领事裁判权，"
+    left_tight[7] = "2、[2分] 1842年《南京条约》签订后，中国开始沦为半殖民地半封建社会，"
+    left_tight[13] = "3、[2分] 1919年五四运动爆发的直接原因是巴黎和会上中国外交失败，"
+    _write(tight, left_tight, RIGHT_COLUMN, "挤在一起的双栏（无整页空白带）")
+
+
+def _write(path: Path, left: list[str], right: list[str], label: str) -> None:
+    c = canvas.Canvas(str(path), pagesize=A4)
+    c.setFont(FONT, 10.5)
+    for i, text in enumerate(left):
         c.drawString(LEFT_X, TOP_Y - i * LINE_H, text)
     # 右栏与左栏使用完全相同的 y 坐标 —— 不分栏就会串行
-    for i, text in enumerate(RIGHT_COLUMN):
+    for i, text in enumerate(right):
         c.drawString(RIGHT_X, TOP_Y - i * LINE_H, text)
-
     c.showPage()
     c.save()
-    print(f"已生成：{OUT}")
-    print(f"  左栏 {len(LEFT_COLUMN)} 行 / 右栏 {len(RIGHT_COLUMN)} 行，两栏行 y 坐标完全相同")
+    print(f"已生成：{path.name}　（{label}；左栏 {len(left)} 行 / 右栏 {len(right)} 行）")
 
 
 if __name__ == "__main__":

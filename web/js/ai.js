@@ -1209,6 +1209,20 @@ export async function recognizeQuestions(lines, opts = {}) {
       }
       break;
     }
+
+    // 一块都没成功就卡在第一块上（网络不通 / 超时 / 服务商拒绝）→ 再往下试也是白等，
+    // 直接把错误交给用户（以前会 8 块 × 3 次 × 60 秒地磨，看起来像卡死）
+    if (out.chunks.done === 0) {
+      const rest = chunks.length - (i + 1);
+      if (rest > 0) {
+        out.chunks.failed += rest;
+        out.errors.push(
+          `第 1 块就没成功（${msgOf(lastError)}），已停止后续 ${rest} 块。` +
+            '建议先到「AI 识别设置」点「测试连接」确认配置与网络。',
+        );
+      }
+      break;
+    }
   }
 
   report({

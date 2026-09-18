@@ -935,11 +935,16 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}, o
  *
  * 为什么需要：`groupTextItemsIntoLines` 只按 y 聚合再按 x 排序，
  * 双栏页面里左右两栏同一横线上的文字会被拼到同一行，题干就会串行
- * （实测「…废除在   A. 购买救国公债 华领事裁判权，蒋介石…」）。
+ * （实测「…废除在   A. 购买救国公债 华领事裁判权，蒋介石…」、
+ *   以及「A. 1840」和「A. 鸦片战争」被拼成同一行）。
  *
- * 做法：统计所有文字项在 x 方向的覆盖情况，在页面中间 30%~70% 的范围内
- * 找一条「没有任何文字跨越」的空白带；找到就按它把项分成左右两组，
- * 读的时候先读完整左栏再读右栏。找不到就按单栏处理。
+ * 两级判定（缺一不可，第二种是用户实际 PDF 的情况）：
+ *   ① **整页空白带**：统计所有文字项在 x 方向的覆盖，在页面中间 30%~70% 找一条
+ *      「没有任何文字跨越」的空白带 —— 排版规整的试卷走这条；
+ *   ② **逐行间隙聚类**：左栏有的行会写得比较长、把整页空白带"截断"（覆盖到空白带上），
+ *      这时改看每一行内部的横向大间隙，如果多数行的间隙都落在同一个 x 位置附近，
+ *      就把它当作分栏线 —— 用户那份 PDF 正是这种（整页没有贯通空白带）。
+ * 两种都判不出来就按单栏处理。
  *
  * @param {Array<{str?:string, width?:number, transform?:number[]}>} items
  * @returns {Array<Array<object>>} 每栏一个数组；单栏时返回长度 1 的数组
@@ -954,9 +959,10 @@ export function splitItemsByColumns(items) {
   const spans = [];
   for (const it of list) {
     const x = Number(it.transform[4]);
+    const y = Number(it.transform[5]);
     const w = Number(it.width);
     if (!Number.isFinite(x)) continue;
-    spans.push({ x, right: x + (Number.isFinite(w) && w > 0 ? w : 0), item: it });
+    spans.push({ x, y, right: x + (Number.isFinite(w) && w > 0 ? w : 0), item: it });
   }
   if (spans.length < 30) return [items];
 
@@ -965,7 +971,23 @@ export function splitItemsByColumns(items) {
   const width = maxX - minX;
   if (!(width > 0)) return [items];
 
-  // 把 x 轴切成 100 个格子，统计每个格子被多少文字覆盖
+  const byBand = splitByCoverageGap(spans, minX, width);
+  if (byBand) return byBand;
+
+  const byLines = splitByLineGaps(spans, minX, width);
+  if (byLines) return byLines;
+
+  return [items];
+}
+
+/**
+ * 方式①：整页范围内找一条没有任何文字跨越的纵向空白带。
+ * @param {Array<{x:number,right:number,item:object}>} spans
+ * @param {number} minX
+ * @param {number} width
+ * @returns {Array<Array<object>>|null} 判定失败返回 null
+ */
+function splitByCoverageGap(spans, minX, width) {
   const BINS = 100;
   const cover = new Array(BINS).fill(0);
   for (const s of spans) {
@@ -974,7 +996,6 @@ export function splitItemsByColumns(items) {
     for (let i = i0; i <= i1; i += 1) cover[i] += 1;
   }
 
-  // 在中间区域找最长的一段「零覆盖」
   const from = Math.floor(BINS * 0.3);
   const to = Math.floor(BINS * 0.7);
   let bestStart = -1;
@@ -993,15 +1014,74 @@ export function splitItemsByColumns(items) {
     }
   }
   // 空白带太窄（< 页宽的 3%）认为不是分栏
-  if (bestStart < 0 || bestLen < 3) return [items];
+  if (bestStart < 0 || bestLen < 3) return null;
 
   const splitX = minX + ((bestStart + bestLen / 2) / BINS) * width;
+  return cutByX(spans, splitX);
+}
+
+/**
+ * 方式②：逐行找横向大间隙并聚类，得到分栏线。
+ * 适用于「左栏有些行写得很长、把整页空白带截断」的双栏排版。
+ * @param {Array<{x:number,y:number,right:number,item:object}>} spans
+ * @param {number} minX
+ * @param {number} width
+ * @returns {Array<Array<object>>|null}
+ */
+function splitByLineGaps(spans, minX, width) {
+  // 按 y 分行（容差 2pt）
+  const rows = [];
+  for (const s of spans) {
+    let row = null;
+    for (const r of rows) {
+      if (Math.abs(r.y - s.y) <= 2) {
+        row = r;
+        break;
+      }
+    }
+    if (!row) {
+      row = { y: s.y, items: [] };
+      rows.push(row);
+    }
+    row.items.push(s);
+  }
+
+  // 每行内部的最大间隙
+  const gapThreshold = Math.max(8, width * 0.015);
+  const centers = [];
+  for (const row of rows) {
+    const sorted = [...row.items].sort((a, b) => a.x - b.x);
+    if (sorted.length < 2) continue;
+    let bestGap = 0;
+    let bestX = 0;
+    for (let i = 1; i < sorted.length; i += 1) {
+      const gap = sorted[i].x - sorted[i - 1].right;
+      if (gap > bestGap) {
+        bestGap = gap;
+        bestX = (sorted[i - 1].right + sorted[i].x) / 2;
+      }
+    }
+    if (bestGap >= gapThreshold) centers.push(bestX);
+  }
+
+  // 多数行都有大间隙，且这些间隙落在同一个位置附近，才认定为分栏
+  if (centers.length < Math.max(5, rows.length * 0.3)) return null;
+  centers.sort((a, b) => a - b);
+  const median = centers[Math.floor(centers.length / 2)];
+  const spread = centers[centers.length - 1] - centers[0];
+  if (spread > width * 0.2) return null;
+  const ratio = (median - minX) / width;
+  if (ratio < 0.25 || ratio > 0.75) return null;
+
+  return cutByX(spans, median);
+}
+
+/** 按 x 分成左右两组（两组都要有足够的项，否则视为误切） */
+function cutByX(spans, splitX) {
   const left = [];
   const right = [];
   for (const s of spans) (s.x < splitX ? left : right).push(s.item);
-
-  // 两栏都要有足够的项，否则判为误切
-  if (left.length < 10 || right.length < 10) return [items];
+  if (left.length < 10 || right.length < 10) return null;
   return [left, right];
 }
 

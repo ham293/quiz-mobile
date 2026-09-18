@@ -8,6 +8,12 @@ import { nowStr } from '../dates.js';
 import * as eb from '../ebbinghaus.js';
 import { extractLines } from '../extract.js';
 import { el, emptyState, confirmDialog, closeSheet, loading, mount, openSheet, toast } from './common.js';
+
+/** 截断长文本，避免把整条错误塞进加载提示里 */
+function shortText(text, limit = 40) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim();
+  return s.length > limit ? `${s.slice(0, limit)}…` : s;
+}
 import { setAction } from '../app.js';
 
 /** AI 识别结果的预览上限（保存时会把全部题目写进题库） */
@@ -193,10 +199,16 @@ async function onAiImport(root) {
       signal: controller ? controller.signal : null,
       onProgress: (info) => {
         if (cancelled) return;
-        if (info.stage === 'start' || info.stage === 'retry') {
-          showProgress(`AI 识别中 第 ${info.index}/${info.total} 块${info.stage === 'retry' ? '（失败重试中…）' : '…'}`);
+        if (info.stage === 'start') {
+          showProgress(`AI 识别中 第 ${info.index}/${info.total} 块…`);
+        } else if (info.stage === 'retry') {
+          // 把失败原因直接写出来：否则用户只看到「失败重试中」，不知道是 Key 错还是网络不通
+          const why = info.message ? `：${shortText(info.message, 40)}` : '';
+          showProgress(`AI 识别中 第 ${info.index}/${info.total} 块（第 ${info.attempt} 次重试${why}）`);
         } else if (info.stage === 'ok') {
           showProgress(`AI 识别中 第 ${info.index}/${info.total} 块（已识别 ${info.questions} 题）`);
+        } else if (info.stage === 'fail') {
+          showProgress(`第 ${info.index}/${info.total} 块失败${info.message ? `：${shortText(info.message, 40)}` : ''}`);
         }
       },
     });
