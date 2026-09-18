@@ -11,6 +11,33 @@ import { extractLines } from './extract.js';
 import { parseLines } from './parser-text.js';
 import { closeSheet, confirmDialog, el, loading, mount, openSheet, toast } from './ui/common.js';
 
+/* ------------------------------------------------ 导入诊断（原始文本行） */
+
+/** 最近一次导入的原始文本行（前 300 行），用于排查分栏/切题问题 */
+const importDebug = { fileName: '', total: 0, lines: [] };
+
+/**
+ * 记录最近一次导入的原始文本行。
+ * @param {string} fileName
+ * @param {Array<{page:number,line:number,text:string}>} lines
+ */
+function rememberImportDebug(fileName, lines) {
+  importDebug.fileName = String(fileName || '');
+  importDebug.total = Array.isArray(lines) ? lines.length : 0;
+  importDebug.lines = Array.isArray(lines) ? lines.slice(0, 300) : [];
+}
+
+/**
+ * 取最近一次导入的原始文本行（供「解析日志」页展示/复制）。
+ * @returns {{fileName:string, total:number, lines:Array, text:string}}
+ */
+export function getImportDebug() {
+  const text = importDebug.lines
+    .map((l) => `p${l.page}:${l.line}\t${l.text}`)
+    .join('\n');
+  return { ...importDebug, text };
+}
+
 /** 屏幕路由表 */
 const ROUTES = {
   banks: { mod: () => import('./ui/banks.js'), fn: 'renderBanks', title: '题库', tab: 'banks' },
@@ -259,6 +286,9 @@ export async function importFile(file, opts = {}) {
       showErrorDetail('已取消导入', '你取消了这次导入。如果解析过程一直不出结果，可以试试：\n· 先把文件另存到手机「文件 / 下载」目录再导入；\n· 用 WPS 把 PDF 另存为一份新的（去掉加密/压缩问题）再导入。');
       return null;
     }
+    // 记住最近一次导入的原始文本行：出问题时可在「解析日志」页一键复制出来
+    // （定位"分栏/切题哪里没对"最有效，只留前 300 行避免占内存）
+    rememberImportDebug(file.name, lines);
     const parsed = parseLines(lines, bankName);
     if (!parsed.questions.length) {
       loading(false);

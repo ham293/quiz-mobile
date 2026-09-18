@@ -47,15 +47,19 @@ export const AI_PROVIDERS = [
 /** localStorage 存储键 */
 export const AI_SETTINGS_KEY = 'quiz.aiSettings';
 
-/** 默认分块字符数（一个块 ≈ 一次请求；太大容易超时/超上下文，太小费额度） */
-export const DEFAULT_CHUNK_CHARS = 6000;
+/**
+ * 默认分块字符数（一个块 ≈ 一次请求）。
+ * 实测：6000 字中文 ≈ 上万 token，免费模型排队时单次响应可能超过 45 秒直接超时；
+ * 调到 2500 字后每次请求快得多，整体更稳（代价是请求次数多一些）。
+ */
+export const DEFAULT_CHUNK_CHARS = 2500;
 
-/** 单次请求超时（毫秒） */
-export const AI_TIMEOUT_MS = 45000;
+/** 单次请求超时（毫秒）——识别用的长请求给足时间，连接测试另用短超时 */
+export const AI_TIMEOUT_MS = 90000;
 
 /** 分块字符数的允许范围 */
-const MIN_CHUNK_CHARS = 1000;
-const MAX_CHUNK_CHARS = 50000;
+const MIN_CHUNK_CHARS = 500;
+const MAX_CHUNK_CHARS = 20000;
 
 /** 选项最多到 H（与 models.OPTION_LETTERS 的 A~J 兼容，AI 一般最多给到 F） */
 const OPTION_LETTERS_AI = 'ABCDEFGH';
@@ -1217,6 +1221,8 @@ export async function recognizeQuestions(lines, opts = {}) {
 
     let ok = false;
     let lastError = null;
+  /** 连续超时的块数（用于「超时连续 2 块才放弃」的判定） */
+  let consecutiveTimeouts = 0;
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       if (aborted()) {
@@ -1285,18 +1291,27 @@ export async function recognizeQuestions(lines, opts = {}) {
       break;
     }
 
-    // 一块都没成功就卡在第一块上（网络不通 / 超时 / 服务商拒绝）→ 再往下试也是白等，
-    // 直接把错误交给用户（以前会 8 块 × 3 次 × 60 秒地磨，看起来像卡死）
+    // 一块都没成功就卡在开头（网络不通 / 服务商拒绝）→ 再往下试也是白等，
+    // 直接把错误交给用户（以前会 8 块 × 3 次 × 60 秒地磨，看起来像卡死）。
+    // **超时例外**：免费模型排队时第一块超时、后面可能就正常，所以超时要连续 2 块才停，
+    // 并在提示里给出「把分块字符数改小」这个最有效的解法。
     if (out.chunks.done === 0) {
-      const rest = chunks.length - (i + 1);
-      if (rest > 0) {
-        out.chunks.failed += rest;
-        out.errors.push(
-          `第 1 块就没成功（${msgOf(lastError)}），已停止后续 ${rest} 块。` +
-            '建议先到「AI 识别设置」点「测试连接」确认配置与网络。',
-        );
+      const code2 = lastError && lastError.code;
+      const isTimeout = code2 === 'timeout';
+      consecutiveTimeouts = isTimeout ? consecutiveTimeouts + 1 : 0;
+      if (!isTimeout || consecutiveTimeouts >= 2) {
+        const rest = chunks.length - (i + 1);
+        if (rest > 0) {
+          out.chunks.failed += rest;
+          out.errors.push(
+            `前面的块都没成功（${msgOf(lastError)}），已停止后续 ${rest} 块。` +
+              (isTimeout
+                ? '建议到「AI 识别设置」把「分块字符数」改小（例如 1500），或换一个更快的服务商。'
+                : '建议先到「AI 识别设置」点「测试连接」确认配置与网络。'),
+          );
+        }
+        break;
       }
-      break;
     }
   }
 

@@ -971,6 +971,9 @@ export function splitItemsByColumns(items) {
   const width = maxX - minX;
   if (!(width > 0)) return [items];
 
+  const byCluster = splitByClustering(spans, minX, width);
+  if (byCluster) return byCluster;
+
   const byBand = splitByCoverageGap(spans, minX, width);
   if (byBand) return byBand;
 
@@ -978,6 +981,82 @@ export function splitItemsByColumns(items) {
   if (byLines) return byLines;
 
   return [items];
+}
+
+/**
+ * 方式①（首选）：把文字项按 x 位置做 **2 均值聚类**，直接看页面上的文字落在几个横向区域。
+ *
+ * 比"找整页空白带"和"逐行找间隙"都稳：那两种在"左栏有些行特别长"或
+ * "行内有更大空隙"的排版上都会失效（用户的 PDF 正是如此，实测两次都没切开）。
+ *
+ * 三重安全阀，避免把单栏页面的文字硬切成两簇：
+ *   ① 两个簇心必须明显分离（≥ 页宽 25% 且 ≥ 60pt）；
+ *   ② 两簇之间的"山谷"里几乎没有文字（中间一半区域内文字项 ≤ 12%）；
+ *   ③ 两簇各自至少占 15% 的文字项。
+ * @param {Array<{x:number,right:number,item:object}>} spans
+ * @param {number} minX
+ * @param {number} width
+ * @returns {Array<Array<object>>|null}
+ */
+function splitByClustering(spans, minX, width) {
+  const centers = spans.map((s) => (s.x + s.right) / 2);
+  if (centers.length < 30) return null;
+
+  let a = Math.min(...centers);
+  let b = Math.max(...centers);
+  if (!(b - a > 0)) return null;
+
+  // 1D 2 均值：迭代若干轮即可收敛
+  for (let iter = 0; iter < 12; iter += 1) {
+    let sa = 0;
+    let na = 0;
+    let sb = 0;
+    let nb = 0;
+    for (const c of centers) {
+      if (Math.abs(c - a) <= Math.abs(c - b)) {
+        sa += c;
+        na += 1;
+      } else {
+        sb += c;
+        nb += 1;
+      }
+    }
+    if (!na || !nb) return null;
+    const na2 = sa / na;
+    const nb2 = sb / nb;
+    if (Math.abs(na2 - a) < 0.5 && Math.abs(nb2 - b) < 0.5) {
+      a = na2;
+      b = nb2;
+      break;
+    }
+    a = na2;
+    b = nb2;
+  }
+  const left = Math.min(a, b);
+  const right = Math.max(a, b);
+  const sep = right - left;
+
+  // 安全阀①：分离得不够开就不是分栏
+  if (sep < Math.max(width * 0.25, 60)) return null;
+
+  // 安全阀②：两簇中间（中段一半区域）不能有很多文字
+  const midFrom = left + sep * 0.25;
+  const midTo = left + sep * 0.75;
+  let midCount = 0;
+  let leftCount = 0;
+  let rightCount = 0;
+  const splitX = (left + right) / 2;
+  for (const c of centers) {
+    if (c >= midFrom && c <= midTo) midCount += 1;
+    if (c < splitX) leftCount += 1;
+    else rightCount += 1;
+  }
+  if (midCount > centers.length * 0.12) return null;
+
+  // 安全阀③：两簇都要有足够的项
+  if (leftCount < centers.length * 0.15 || rightCount < centers.length * 0.15) return null;
+
+  return cutByX(spans, splitX);
 }
 
 /**

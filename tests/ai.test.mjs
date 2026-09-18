@@ -139,9 +139,9 @@ test('saveAiSettings / loadAiSettings：合并保存并能读回，换服务商�
   assert.equal(custom.baseUrl, 'https://example.com/v1');
   assert.equal(custom.model, 'my-model');
 
-  // chunkChars 越界会被收敛回合法范围
-  assert.equal(saveAiSettings({ chunkChars: 5 }).chunkChars, 1000);
-  assert.equal(saveAiSettings({ chunkChars: 999999 }).chunkChars, 50000);
+  // chunkChars 越界会被收敛回合法范围（下限 500：免费模型排队时小块更稳）
+  assert.equal(saveAiSettings({ chunkChars: 5 }).chunkChars, 500);
+  assert.equal(saveAiSettings({ chunkChars: 999999 }).chunkChars, 20000);
   assert.equal(saveAiSettings({ chunkChars: 'abc' }).chunkChars, DEFAULT_CHUNK_CHARS);
 
   assert.equal(isAiConfigured(), true);

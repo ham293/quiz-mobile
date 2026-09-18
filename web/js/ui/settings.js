@@ -520,12 +520,57 @@ export async function renderLogs(root, params = {}) {
   }
 
   if (!errors.length && !skipped.length) {
-    mount(root, head, el('div.card', {}, [el('p.card-sub', { text: '解析很干净，没有异常与跳过记录。' })]));
+    mount(
+      root,
+      head,
+      rawLinesCard(),
+      el('div.card', {}, [el('p.card-sub', { text: '解析很干净，没有异常与跳过记录。' })]),
+    );
     return;
   }
 
-  mount(root, head, switchRow, errorsBlock, skippedBlock);
+  mount(root, head, rawLinesCard(), switchRow, errorsBlock, skippedBlock);
   paint();
+}
+
+/**
+ * 「原始文本行」卡片：把最近一次导入时程序读到的文本按行列出来（前 300 行），
+ * 可一键复制。定位「分栏没切开 / 题干串行 / 选项没识别」最有效——
+ * 用户把这段发出来，就能看出程序到底看到了什么。
+ * @returns {HTMLElement}
+ */
+function rawLinesCard() {
+  const debug = getImportDebug();
+  if (!debug.total) {
+    return el('div.card', {}, [
+      el('h3.card-title', { text: '原始文本行' }),
+      el('p.card-sub', { text: '还没有导入记录。导入一次题库后，这里会显示程序实际读到的文本行（用于排查识别问题）。' }),
+    ]);
+  }
+  const body = el('pre.pre-wrap.mono', {
+    style: { maxHeight: '40vh', overflow: 'auto', background: 'var(--bg)', padding: '10px', borderRadius: '10px', fontSize: '11px', margin: '0' },
+    text: debug.text,
+  });
+  return el('div.card', {}, [
+    el('h3.card-title', { text: `原始文本行（${debug.lines.length}/${debug.total}）` }),
+    el('p.card-sub', {
+      text: `最近一次导入：${debug.fileName}。下面是程序实际读到的文本（含页码/行号），` +
+        '如果发现「左右两栏的文字被拼在同一行」或「选项没被识别」，把这段发出来即可定位。',
+    }),
+    body,
+    el('button.btn.block.mt12', {
+      type: 'button',
+      text: '复制原始文本行',
+      onclick: async () => {
+        try {
+          await navigator.clipboard.writeText(`【${debug.fileName}】原始文本行\n${debug.text}`);
+          toast('已复制，发给开发者即可定位');
+        } catch {
+          toast('复制失败，请长按上面的文字手动选择');
+        }
+      },
+    }),
+  ]);
 }
 
 /* ------------------------------------------------------------ 手动补录 */
