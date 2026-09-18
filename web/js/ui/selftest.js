@@ -55,15 +55,20 @@ export async function renderSelfTest(root) {
     ok: true,
     detail: '',
   });
-  results.push(await runCheck('WebView 版本', async () => {
+  // WebView 版本只作提示：内核较老本身不算异常（所需 API 已由 polyfills 补齐，
+  // 解析会自动改用 pdf.js 兼容版），所以标成 ⚠️ 参考项而不是 ❌
+  results.push(await runCheck('WebView 版本（仅参考）', async () => {
     const ua = navigator.userAgent || '';
     const m = /Chrome\/(\d+)/.exec(ua);
     const major = m ? Number(m[1]) : 0;
+    const old = major > 0 && major < 124;
     return {
-      ok: major === 0 ? true : major >= 119,
-      detail: major ? `Chrome/${major}${major < 119 ? '（低于 119，pdf.js 需要的新 API 可能缺失，已自动补齐）' : ''}` : ua.slice(0, 60),
+      ok: !old,
+      detail: major
+        ? `Chrome/${major}${old ? '（内核较旧，所需 API 已自动补齐，解析走兼容版，不影响使用）' : ''}`
+        : ua.slice(0, 60),
     };
-  }));
+  }, { optional: true }));
 
   // 2. 现代 API
   for (const item of polyfillReport()) {
