@@ -8,11 +8,11 @@
 
 | 版本 | 说明 | 下载 |
 | --- | --- | --- |
-| `app-release.apk`（6.0 MB） | **推荐**，v1.2.2 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-release.apk) |
-| `app-debug.apk`（7.1 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-debug.apk) |
+| `app-release.apk`（6.0 MB） | **推荐**，v1.2.3 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.3/app-release.apk) |
+| `app-debug.apk`（7.1 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.3/app-debug.apk) |
 
 > **手机网络打不开 github.com 下载链接时**（国内常见），在下载地址前面加一个加速前缀即可，例如：
-> `https://ghproxy.net/https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-release.apk`
+> `https://ghproxy.net/https://github.com/ham293/quiz-mobile/releases/download/v1.2.3/app-release.apk`
 > （`https://ghfast.top/`、`https://gh-proxy.com/` 效果相同，哪个通用哪个）
 > 也可以去仓库的 **Actions → 最新一次运行 → Artifacts** 下载 `刷题助手-APK`。
 
@@ -48,7 +48,7 @@
 2. **等云构建**：打开仓库页面的 **Actions → 构建 APK**，约 5～10 分钟（首次会久一些）。
 3. **下载安装**：
    - 日常做法：进 **Actions** → 点最新一次运行 → 页面底部 **Artifacts** → 下载 `刷题助手-APK`（zip 里是 `app-debug.apk` / `app-release.apk`）。
-   - 更方便的做法：打 tag 并推送，工作流会把 APK 直接发布到 **Releases**（本项目已发布 v1.2.2）：
+   - 更方便的做法：打 tag 并推送，工作流会把 APK 直接发布到 **Releases**（本项目已发布 v1.2.3）：
      ```bash
      git tag v1.0.1 && git push origin v1.0.1
      ```
@@ -69,6 +69,7 @@
 | 艾宾浩斯 | 间隔 `[0, 1, 2, 4, 7, 15, 30]` 天；答错回到阶段 0（当天复习），答对推进一阶段；首页提示今日到期数量 |
 | 收藏本 | 刷题时点「收藏」，按题型分组，可只练收藏题（收藏练习里答错照样进错题本） |
 | 统计 | 本次练习报告（答题数/正确数/正确率/答错列表/薄弱知识点）+ 累计统计（练习次数、总正确率、最佳正确率、各题型正确率、各模式分布、最近 20 次） |
+| **AI 讲解** | 原题没有解析时，答错可点「🤖 AI 讲解」让 AI 现场写一段讲解（也可在设置里开「错题自动讲解」）；生成的解析会存回题库与错题本 |
 | 手动补录 | 解析异常或识别不准的题，可在「设置 → 手动补录」里按表单补录；按题干去重，与自动解析题完全平权 |
 | **知识点自动出题** | 上传知识点 / 复习资料（docx / pdf / txt，或直接粘贴文本），用**规则离线生成**填空题、选择题、判断题，每题都带参考答案与出处原句；生成结果直接存成一个新题库，可练习、进错题本、参与统计 |
 | 解析日志 | 记录每一条解析异常（时间/页码/行号/原因/原始题目全文）与被跳过的噪声行（页眉页脚、页码、推广语、章节标题） |

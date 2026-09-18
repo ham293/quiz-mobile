@@ -363,3 +363,45 @@ export async function deleteManualAt(name, index) {
   await saveBank(bank);
   return true;
 }
+
+/**
+ * 把 AI 生成的解析写回题库与错题本（缓存起来，避免重复消耗额度）。
+ *
+ * 场景：原题没有解析时，用户点「AI 讲解」生成一段讲解；
+ * 存回后下次练习/错题本/导出 PDF 都能直接看到，不用再生成一遍。
+ *
+ * @param {string} bankName 题库名
+ * @param {string} qid 题目 id
+ * @param {string} explanation 解析文本
+ * @returns {Promise<boolean>} 是否写入成功
+ */
+export async function updateQuestionExplanation(bankName, qid, explanation) {
+  const text = String(explanation || '').trim();
+  if (!bankName || !qid || !text) return false;
+  let changed = false;
+  try {
+    const bank = await getBank(bankName);
+    if (bank && Array.isArray(bank.questions)) {
+      const q = bank.questions.find((item) => item && item.qid === qid);
+      if (q) {
+        q.explanation = text;
+        await saveBank(bank);
+        changed = true;
+      }
+    }
+  } catch (err) {
+    console.warn('[bank] 写入解析到题库失败：', err);
+  }
+  try {
+    const records = await loadWrong(bankName);
+    const index = records.findIndex((rec) => rec && rec.qid === qid);
+    if (index >= 0) {
+      records[index].explanation = text;
+      await saveWrong(bankName, records);
+      changed = true;
+    }
+  } catch (err) {
+    console.warn('[bank] 写入解析到错题本失败：', err);
+  }
+  return changed;
+}

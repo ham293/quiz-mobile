@@ -259,6 +259,7 @@ function paramCard(root) {
         model: draft.model,
         apiKey: draft.apiKey,
         chunkChars: draft.chunkChars,
+        autoExplain: draft.autoExplain === true,
         enabled: true,
       });
       draft = saved;
@@ -284,6 +285,18 @@ function paramCard(root) {
     },
   });
 
+  /* --- 错题自动讲解开关 --- */
+  const autoBtn = el('button.chip', {
+    type: 'button',
+    text: draft.autoExplain ? '已开启' : '已关闭',
+    class: draft.autoExplain ? 'chip active' : 'chip',
+    onclick: () => {
+      draft.autoExplain = !draft.autoExplain;
+      autoBtn.textContent = draft.autoExplain ? '已开启' : '已关闭';
+      autoBtn.className = draft.autoExplain ? 'chip active' : 'chip';
+    },
+  });
+
   return el('div.card', {}, [
     el('h3.card-title', { text: '参数' }),
     field('API Key', el('div.row', {}, [el('div.grow', {}, [keyInput]), toggleBtn]), '只保存在本机浏览器（localStorage），不会写进题库，也不会出现在日志里。'),
@@ -291,6 +304,7 @@ function paramCard(root) {
     field('模型名', modelInput, '模型名偶尔会改名或下线（免费模型尤其如此），不通就先点下面的「测试连接」看服务商返回的原始错误。'),
     modelHint,
     field('分块字符数', chunkInput, '默认 6000。太大容易超时/超出上下文，太小会多花请求次数与额度。'),
+    field('错题自动讲解', autoBtn, '答错且原题没有解析时，自动用 AI 生成讲解（会消耗额度）。关闭时可在答题页点「🤖 AI 讲解」手动生成。'),
     testBtn,
     resultNode,
     el('div.divider'),

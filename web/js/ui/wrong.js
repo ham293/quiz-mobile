@@ -7,6 +7,7 @@
  * 两个页面结构一致，只有「元信息行」和「导出的 wrongInfo」不同。
  */
 
+import { explainQuestion, isAiConfigured } from '../ai.js';
 import { navigate, setAction, setBackVisible, state } from '../app.js';
 import * as repo from '../bank.js';
 import * as eb from '../ebbinghaus.js';
@@ -185,12 +186,10 @@ function openDetail(rec, kind, favQids, toggle) {
 
   box.appendChild(el('div.divider'));
   box.appendChild(kv('正确答案', rec.answer || '（无参考答案）'));
-  if (rec.explanation) {
-    box.appendChild(el('div.mt8', {}, [
-      el('div.tiny.muted', { text: '解析' }),
-      el('div.small.pre-wrap', { text: rec.explanation }),
-    ]));
-  }
+  // 解析区：原题没有解析时可以点「AI 讲解」现场生成，并缓存回题库/错题本
+  const explainBox = el('div.mt8');
+  box.appendChild(explainBox);
+  renderExplain(explainBox, rec);
   box.appendChild(kv('溯源位置', locationText(rec)));
 
   if (kind === 'wrong') {
@@ -218,6 +217,49 @@ function openDetail(rec, kind, favQids, toggle) {
   }));
 
   openSheet(box);
+}
+
+/**
+ * 详情里的解析区：有解析就显示；没有则给「AI 讲解」按钮（生成后缓存回题库/错题本）。
+ * @param {HTMLElement} slot
+ * @param {object} rec 错题/收藏记录
+ */
+function renderExplain(slot, rec) {
+  slot.textContent = '';
+  if (rec.explanation) {
+    slot.appendChild(el('div.tiny.muted', { text: '解析' }));
+    slot.appendChild(el('div.small.pre-wrap', { text: rec.explanation }));
+    return;
+  }
+  slot.appendChild(el('div.tiny.muted', { text: '解析：原题没有（可让 AI 讲一下）' }));
+  if (!isAiConfigured()) {
+    slot.appendChild(el('div.tiny.muted.mt8', { text: '到「设置 → AI 识别设置」填一个 API Key 就能用（智谱 GLM-4-Flash 免费）。' }));
+    return;
+  }
+  const btn = el('button.btn.sm.mt8', {
+    type: 'button',
+    text: '🤖 AI 讲解',
+    onclick: async () => {
+      btn.disabled = true;
+      btn.textContent = '正在生成…';
+      const res = await explainQuestion(rec);
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = '🤖 AI 讲解';
+        toast(res.message || '生成失败', 3200);
+        return;
+      }
+      rec.explanation = res.explanation;
+      try {
+        await repo.updateQuestionExplanation(state.bankName, rec.qid, res.explanation);
+      } catch (err) {
+        console.warn('[wrong] 缓存解析失败（不影响本次显示）：', err);
+      }
+      renderExplain(slot, rec);
+      toast('已生成解析并保存');
+    },
+  });
+  slot.appendChild(btn);
 }
 
 /* ------------------------------------------------------------ 练习入口 */

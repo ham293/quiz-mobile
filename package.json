@@ -1,6 +1,6 @@
 {
   "name": "quiz-mobile",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "private": true,
   "description": "刷题助手 · 手机版（Capacitor + 原生 JS）",
   "type": "module",

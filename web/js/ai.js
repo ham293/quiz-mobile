@@ -180,7 +180,7 @@ function clampChunkChars(value) {
 
 /**
  * 出厂默认设置（默认选中第一个免费服务商，但 Key 为空 → 未配置）。
- * @returns {{provider:string, baseUrl:string, model:string, apiKey:string, enabled:boolean, chunkChars:number}}
+ * @returns {{provider:string, baseUrl:string, model:string, apiKey:string, enabled:boolean, chunkChars:number, autoExplain:boolean}}
  */
 function defaultSettings() {
   const first = AI_PROVIDERS[0];
@@ -191,6 +191,8 @@ function defaultSettings() {
     apiKey: '',
     enabled: true,
     chunkChars: DEFAULT_CHUNK_CHARS,
+    /** 答错且原题没有解析时，是否自动用 AI 生成讲解（会消耗额度，默认关） */
+    autoExplain: false,
   };
 }
 
@@ -223,6 +225,7 @@ export function loadAiSettings() {
     apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey.trim() : '',
     enabled: parsed.enabled !== false,
     chunkChars: clampChunkChars(parsed.chunkChars),
+    autoExplain: parsed.autoExplain === true,
   };
 }
 
@@ -230,7 +233,7 @@ export function loadAiSettings() {
  * 合并保存 AI 设置，返回保存后的完整对象。
  * 换服务商（patch.provider）且没同时给 baseUrl/model 时，自动带出该预设的默认值。
  * @param {object} [patch] 要覆盖的字段
- * @returns {{provider:string, baseUrl:string, model:string, apiKey:string, enabled:boolean, chunkChars:number}}
+ * @returns {{provider:string, baseUrl:string, model:string, apiKey:string, enabled:boolean, chunkChars:number, autoExplain:boolean}}
  */
 export function saveAiSettings(patch = {}) {
   const next = { ...loadAiSettings() };
@@ -246,6 +249,7 @@ export function saveAiSettings(patch = {}) {
   if (patch.apiKey !== undefined) next.apiKey = String(patch.apiKey || '').trim();
   if (patch.enabled !== undefined) next.enabled = patch.enabled !== false;
   if (patch.chunkChars !== undefined) next.chunkChars = clampChunkChars(patch.chunkChars);
+  if (patch.autoExplain !== undefined) next.autoExplain = patch.autoExplain === true;
 
   storageSet(AI_SETTINGS_KEY, JSON.stringify(next));
   return next;
@@ -1305,6 +1309,122 @@ export async function recognizeQuestions(lines, opts = {}) {
     questions: out.questions.length,
   });
   return out;
+}
+
+/**
+ * 用 AI 为一道题生成「讲解」（解析）。
+ *
+ * 场景：不少题库文件只写了「正确答案：A」，没有解析段落；答错时界面只能显示答案。
+ * 这个函数让用户按需用 AI 生成一段简明讲解（生成后由调用方缓存进题库/错题本）。
+ * **不抛异常**，统一返回结果对象。
+ *
+ * @param {object} question Question 对象（至少要有 stem；有 options/answer 更好）
+ * @param {{settings?:object, requestFn?:Function, signal?:AbortSignal, timeoutMs?:number}} [opts]
+ * @returns {Promise<{ok:boolean, explanation:string, message:string, cached:boolean}>}
+ */
+export async function explainQuestion(question, opts = {}) {
+  const q = question || {};
+  const existing = String(q.explanation || '').trim();
+  if (existing) {
+    // 已经有解析就不发请求，省额度
+    return { ok: true, explanation: existing, message: '', cached: true };
+  }
+
+  const s = opts.settings || loadAiSettings();
+  const fail = (message) => ({ ok: false, explanation: '', message: String(message), cached: false });
+
+  if (!String(q.stem || '').trim()) return fail('这道题没有题干，无法生成讲解。');
+  if (!String(s.apiKey || '').trim()) return fail('还没有配置 AI：请到「设置 → AI 识别设置」填写 API Key。');
+  if (!String(s.baseUrl || '').trim() || !String(s.model || '').trim()) {
+    return fail('AI 配置不完整：请到「设置 → AI 识别设置」补全接口地址与模型名。');
+  }
+
+  // 把题目内容整理成给模型看的文本
+  const optionLines = Object.entries(q.options || {})
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    .map(([k, v]) => `${k}. ${v}`)
+    .join('\n');
+  const qtype = String(q.qtype || '');
+  const userText = [
+    `题型：${qtype}题`,
+    `题干：${q.stem}`,
+    optionLines ? `选项：\n${optionLines}` : '',
+    q.answer ? `正确答案：${q.answer}` : '',
+    '请只依据上面给出的题干与选项讲解，不要编造题干里没有的事实。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
+  const requestFn = typeof opts.requestFn === 'function' ? opts.requestFn : defaultRequest;
+  try {
+    const payload = buildRequest({
+      settings: s,
+      messages: [
+        {
+          role: 'system',
+          content:
+            '你是中国考试辅导老师。请用简明中文讲解这道题，要求：\n' +
+            '1) 说清为什么正确答案成立；\n' +
+            '2) 简要指出其他选项（或常见易错点）为什么不对；\n' +
+            '3) 总字数不超过 120 字，不要用 Markdown 标题、不要说"根据题目"之类的废话；\n' +
+            '4) 严格输出 JSON：{"explanation":"讲解内容"}，不要输出其它文字。',
+        },
+        { role: 'user', content: userText },
+      ],
+      signal: opts.signal || null,
+      temperature: 0.2,
+      maxTokens: 400,
+      timeoutMs: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : AI_TIMEOUT_MS,
+    });
+    const response = await requestFn(payload);
+    const content = extractMessageContent(response);
+    const text = pickExplanation(content);
+    if (!text) {
+      return fail('模型没有返回可用的讲解内容，可以再试一次或换一个模型。');
+    }
+    return { ok: true, explanation: text, message: '', cached: false };
+  } catch (err) {
+    return fail(msgOf(err));
+  }
+}
+
+/**
+ * 从模型回复里取出讲解文本（容忍 ```json 围栏 / 前后废话 / 直接给纯文本）。
+ * @param {string} raw
+ * @returns {string}
+ */
+function pickExplanation(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+  // 先按 JSON 取
+  let jsonText = text;
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(text);
+  if (fence) jsonText = fence[1].trim();
+  const start = jsonText.indexOf('{');
+  const end = jsonText.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(jsonText.slice(start, end + 1));
+      const value = obj && (obj.explanation || obj.analysis || obj.text);
+      if (typeof value === 'string' && value.trim()) return cleanExplanation(value);
+    } catch {
+      /* 落回纯文本 */
+    }
+  }
+  // 不是 JSON 就把围栏/引号剥掉直接用
+  return cleanExplanation(text.replace(/```[a-z]*|```/gi, '').replace(/^["'\s]+|["'\s]+$/g, ''));
+}
+
+/**
+ * 清洗讲解文本：去多余空白、去掉模型爱加的“解析：”前缀、限长。
+ * @param {string} value
+ * @returns {string}
+ */
+function cleanExplanation(value) {
+  let s = String(value || '').replace(/\s*\n\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+  s = s.replace(/^(解析|讲解|答案解析)\s*[:：]\s*/, '');
+  if (s.length > 300) s = `${s.slice(0, 300)}…`;
+  return s;
 }
 
 /**

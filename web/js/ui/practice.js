@@ -1,5 +1,6 @@
 /** 练习页：模式选择 / 答题会话 / 练习报告 */
 
+import { explainQuestion, isAiConfigured, loadAiSettings } from '../ai.js';
 import { goBack, loadBank, navigate, setAction, setBackVisible, state } from '../app.js';
 import * as repo from '../bank.js';
 import * as eb from '../ebbinghaus.js';
@@ -336,6 +337,67 @@ export async function renderSession(root) {
     }
   }
 
+  /* --- AI 讲解（原题没有解析时） --- */
+
+  /** 设置里是否开了「错题自动讲解」 */
+  function aiAutoExplain() {
+    try {
+      return loadAiSettings().autoExplain === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 渲染讲解区域：没有解析时显示灰色提示 + 「AI 讲解」按钮 */
+  function renderExplainSlot(slot, message = '') {
+    slot.textContent = '';
+    if (q.explanation) {
+      slot.appendChild(el('div', {}, [el('b', { text: '解析：' }), el('span.pre-wrap', { text: q.explanation })]));
+      return;
+    }
+    slot.appendChild(el('div.muted', { text: message || '（原题没有解析）' }));
+    if (!isAiConfigured()) {
+      slot.appendChild(el('div.tiny.muted.mt8', { text: '想让它讲解？到「设置 → AI 识别设置」填一个 API Key 即可（智谱 GLM-4-Flash 免费）。' }));
+      return;
+    }
+    const btn = el('button.btn.sm.mt8', {
+      type: 'button',
+      text: '🤖 AI 讲解',
+      onclick: () => generateExplanation(slot),
+    });
+    slot.appendChild(btn);
+  }
+
+  /**
+   * 调 AI 生成讲解，成功后就地替换文案并缓存进题库/错题本。
+   * @param {HTMLElement} slot
+   * @param {{silent?:boolean}} [opts] silent=true 时失败只 toast（自动讲解场景）
+   */
+  async function generateExplanation(slot, opts = {}) {
+    const btn = slot.querySelector('button');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '正在生成…';
+    }
+    const res = await explainQuestion(q);
+    if (!res.ok) {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '🤖 AI 讲解';
+      }
+      toast(res.message || '生成失败', 3200);
+      return;
+    }
+    q.explanation = res.explanation;
+    try {
+      await repo.updateQuestionExplanation(state.bankName, q.qid, res.explanation);
+    } catch (err) {
+      console.warn('[practice] 缓存解析失败（不影响本次显示）：', err);
+    }
+    renderExplainSlot(slot);
+    if (!opts.silent) toast('已生成解析并保存');
+  }
+
   /* --- 提交判定 --- */
   function applyResult(correct, value) {
     view.answered = { correct, value };
@@ -360,6 +422,15 @@ export async function renderSession(root) {
         el('b', { text: '解析：' }),
         el('span.pre-wrap', { text: q.explanation }),
       ]));
+    } else {
+      // 很多题库文件只写「正确答案：A」，没有解析段落 —— 给用户一个用 AI 现场讲解的入口
+      const explainSlot = el('div.mt8.small');
+      feedbackBox.appendChild(explainSlot);
+      renderExplainSlot(explainSlot);
+      // 开了「错题自动讲解」且答错 → 自动生成一次（失败只 toast，不打断）
+      if (!correct && aiAutoExplain()) {
+        void generateExplanation(explainSlot, { silent: true });
+      }
     }
     if (view.note) feedbackBox.appendChild(el('div.small.mt8', { text: view.note }));
     renderBottomActions();

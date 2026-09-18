@@ -37,6 +37,8 @@ import {
   testAiConnection,
   usageOf,
 } from '../web/js/ai.js';
+// 命名空间导入：追加的 AI 讲解用例里用 ai.xxx 调用（与上面的具名导入是同一个模块）
+import * as ai from '../web/js/ai.js';
 
 /* ------------------------------------------------------------------ *
  * 测试用工具
@@ -877,4 +879,111 @@ test('testAiConnection：成功与各类失败都返回结果对象而不抛异�
   assert.equal(authFail.ok, false);
   assert.equal(authFail.code, 'auth');
   assert.match(authFail.message, /API Key 无效或没有权限/);
+});
+
+/* ------------------------------------------------------------------ *
+ * AI 讲解（explainQuestion）
+ * ------------------------------------------------------------------ */
+
+test('explainQuestion：已有解析时不发请求，直接返回', async () => {
+  let called = 0;
+  const r = await ai.explainQuestion(
+    { stem: '题干', explanation: '  已有解析  ' },
+    { requestFn: async () => { called += 1; return {}; } },
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.cached, true);
+  assert.equal(r.explanation, '已有解析');
+  assert.equal(called, 0, '已有解析不应发请求');
+});
+
+test('explainQuestion：没配 Key / 缺题干时给出中文原因且不发请求', async () => {
+  let called = 0;
+  const noKey = await ai.explainQuestion(
+    { stem: '题干' },
+    { settings: { apiKey: '', baseUrl: 'https://x/v1', model: 'm' }, requestFn: async () => { called += 1; } },
+  );
+  assert.equal(noKey.ok, false);
+  assert.match(noKey.message, /API Key/);
+
+  const noStem = await ai.explainQuestion(
+    { stem: '   ' },
+    { settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' }, requestFn: async () => { called += 1; } },
+  );
+  assert.equal(noStem.ok, false);
+  assert.match(noStem.message, /题干/);
+  assert.equal(called, 0);
+});
+
+test('explainQuestion：解析 JSON 回复并去掉“解析：”前缀', async () => {
+  const r = await ai.explainQuestion(
+    { stem: '近代中国半殖民地半封建社会的起点是', qtype: '单选', options: { A: '1840年' }, answer: 'A' },
+    {
+      settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' },
+      requestFn: async (payload) => {
+        // 请求体里必须带上题干与答案，模型才知道讲哪道题
+        const body = JSON.stringify(payload.body || payload);
+        assert.ok(body.includes('近代中国半殖民地半封建社会的起点是'), '请求应包含题干');
+        assert.ok(body.includes('正确答案'), '请求应包含答案');
+        return { choices: [{ message: { content: '```json\n{"explanation":"解析：鸦片战争后签订《南京条约》。"}\n```' } }] };
+      },
+    },
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.explanation, '鸦片战争后签订《南京条约》。');
+  assert.equal(r.cached, false);
+});
+
+test('explainQuestion：模型返回纯文本也能用；返回空则报错', async () => {
+  const plain = await ai.explainQuestion(
+    { stem: '题干', qtype: '判断', answer: '正确' },
+    {
+      settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' },
+      requestFn: async () => ({ choices: [{ message: { content: '这句话是对的，因为……' } }] }),
+    },
+  );
+  assert.equal(plain.ok, true);
+  assert.match(plain.explanation, /这句话是对的/);
+
+  const empty = await ai.explainQuestion(
+    { stem: '题干' },
+    {
+      settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' },
+      requestFn: async () => ({ choices: [{ message: { content: '   ' } }] }),
+    },
+  );
+  assert.equal(empty.ok, false);
+  assert.match(empty.message, /没有返回/);
+});
+
+test('explainQuestion：网络错误映射成中文原因（401 / 超时）', async () => {
+  const auth = await ai.explainQuestion(
+    { stem: '题干' },
+    {
+      settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' },
+      requestFn: async () => { throw new AiError('API Key 无效或没有权限。', 'auth'); },
+    },
+  );
+  assert.equal(auth.ok, false);
+  assert.match(auth.message, /API Key 无效/);
+
+  const timeout = await ai.explainQuestion(
+    { stem: '题干' },
+    {
+      settings: { apiKey: 'k', baseUrl: 'https://x/v1', model: 'm' },
+      requestFn: async () => { throw new AiError('请求超时，请检查网络或用更小的分块', 'timeout'); },
+    },
+  );
+  assert.equal(timeout.ok, false);
+  assert.match(timeout.message, /超时/);
+});
+
+test('设置：autoExplain 默认为 false，可保存/读回', async () => {
+  ai.clearAiSettings();
+  assert.equal(ai.loadAiSettings().autoExplain, false, '默认关闭自动讲解');
+  const saved = ai.saveAiSettings({ autoExplain: true });
+  assert.equal(saved.autoExplain, true);
+  assert.equal(ai.loadAiSettings().autoExplain, true);
+  ai.clearAiSettings();
+  assert.equal(ai.loadAiSettings().autoExplain, false);
 });
