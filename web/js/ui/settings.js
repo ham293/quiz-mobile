@@ -265,6 +265,10 @@ export async function renderSettings(root, params = {}) {
         onClick: () => navigate('banks', {}, { push: false }),
       }),
     );
+    // 还没有题库时也要能配置 AI：首次使用常常是先配好 Key 再导入题库
+    children.push(
+      blockButton('🤖 AI 识别设置（可选）', '用大模型识别排版特殊的题库', () => navigate('ai')),
+    );
   } else {
     let wrongRecords = [];
     let favorites = [];
@@ -334,6 +338,11 @@ export async function renderSettings(root, params = {}) {
 
     children.push(
       blockButton('手动补录异常题', `已补录 ${manualQuestions.length} 题`, () => navigate('manual')),
+    );
+
+    // AI 识别是可选功能：入口放在数据与维护里，随时可开可关
+    children.push(
+      blockButton('🤖 AI 识别设置（可选）', '用大模型识别排版特殊的题库', () => navigate('ai')),
     );
 
     children.push(

@@ -25,6 +25,7 @@ const ALL_SCREENS = [
   ['stats', '统计'],
   ['logs', '解析日志'],
   ['manual', '手动补录'],
+  ['ai', 'AI 识别设置'],
   ['settings', '设置'],
   ['about', '关于'],
 ];

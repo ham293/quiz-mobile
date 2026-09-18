@@ -22,6 +22,7 @@ const ROUTES = {
   favorites: { mod: () => import('./ui/wrong.js'), fn: 'renderFavorites', title: '收藏本', tab: 'wrong' },
   stats: { mod: () => import('./ui/stats.js'), fn: 'renderStats', title: '统计', tab: 'stats' },
   settings: { mod: () => import('./ui/settings.js'), fn: 'renderSettings', title: '设置', tab: 'settings' },
+  ai: { mod: () => import('./ui/ai-settings.js'), fn: 'renderAiSettings', title: 'AI 识别设置', tab: 'settings' },
   logs: { mod: () => import('./ui/settings.js'), fn: 'renderLogs', title: '解析日志', tab: 'settings' },
   manual: { mod: () => import('./ui/settings.js'), fn: 'renderManual', title: '手动补录', tab: 'settings' },
   about: { mod: () => import('./ui/settings.js'), fn: 'renderAbout', title: '关于', tab: 'settings' },
