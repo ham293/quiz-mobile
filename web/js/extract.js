@@ -884,13 +884,23 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}, o
         continue;
       }
 
-      // 先归一化（行首尾空白不进结果）再编号，保证 line 从 1 连续无空洞
-      const pageTexts = groupTextItemsIntoLines(content ? content.items : [])
-        .map((text) => text.trim())
-        .filter(Boolean);
+      // 先按「分栏」切开（考试卷常见左右两栏排版）：不切的话，左右两栏同一横线上的
+      // 文字会被聚合成同一行，题干就会串行（实测某考试 PDF 正是如此）。
+      const columns = splitItemsByColumns(content ? content.items : []);
+      const pageTexts = [];
+      for (const columnItems of columns) {
+        pageTexts.push(
+          ...groupTextItemsIntoLines(columnItems)
+            .map((text) => text.trim())
+            .filter(Boolean),
+        );
+      }
       if (!pageTexts.length) {
         warnings.push(`第 ${pageNumber} 页没有文字层（可能是图片页）。`);
         continue;
+      }
+      if (columns.length > 1) {
+        warnings.push(`第 ${pageNumber} 页识别为 ${columns.length} 栏排版，已按栏读取。`);
       }
       textPageCount += 1;
       pageTexts.forEach((text, idx) => {
@@ -918,6 +928,81 @@ async function readPdfDocument(pdfjsLib, sourceBytes, warnings, strategy = {}, o
   }
 
   return lines;
+}
+
+/**
+ * 把一页的文字项按「分栏」切开（左右两栏排版的 PDF，如考试卷/资料）。
+ *
+ * 为什么需要：`groupTextItemsIntoLines` 只按 y 聚合再按 x 排序，
+ * 双栏页面里左右两栏同一横线上的文字会被拼到同一行，题干就会串行
+ * （实测「…废除在   A. 购买救国公债 华领事裁判权，蒋介石…」）。
+ *
+ * 做法：统计所有文字项在 x 方向的覆盖情况，在页面中间 30%~70% 的范围内
+ * 找一条「没有任何文字跨越」的空白带；找到就按它把项分成左右两组，
+ * 读的时候先读完整左栏再读右栏。找不到就按单栏处理。
+ *
+ * @param {Array<{str?:string, width?:number, transform?:number[]}>} items
+ * @returns {Array<Array<object>>} 每栏一个数组；单栏时返回长度 1 的数组
+ */
+export function splitItemsByColumns(items) {
+  const list = (Array.isArray(items) ? items : []).filter(
+    (it) => it && typeof it.str === 'string' && it.str.trim() && Array.isArray(it.transform),
+  );
+  // 项太少不值得判断分栏（也避免误切）
+  if (list.length < 30) return [items];
+
+  const spans = [];
+  for (const it of list) {
+    const x = Number(it.transform[4]);
+    const w = Number(it.width);
+    if (!Number.isFinite(x)) continue;
+    spans.push({ x, right: x + (Number.isFinite(w) && w > 0 ? w : 0), item: it });
+  }
+  if (spans.length < 30) return [items];
+
+  const minX = Math.min(...spans.map((s) => s.x));
+  const maxX = Math.max(...spans.map((s) => s.right));
+  const width = maxX - minX;
+  if (!(width > 0)) return [items];
+
+  // 把 x 轴切成 100 个格子，统计每个格子被多少文字覆盖
+  const BINS = 100;
+  const cover = new Array(BINS).fill(0);
+  for (const s of spans) {
+    const i0 = Math.max(0, Math.floor(((s.x - minX) / width) * BINS));
+    const i1 = Math.min(BINS - 1, Math.ceil(((s.right - minX) / width) * BINS) - 1);
+    for (let i = i0; i <= i1; i += 1) cover[i] += 1;
+  }
+
+  // 在中间区域找最长的一段「零覆盖」
+  const from = Math.floor(BINS * 0.3);
+  const to = Math.floor(BINS * 0.7);
+  let bestStart = -1;
+  let bestLen = 0;
+  let runStart = -1;
+  for (let i = from; i <= to; i += 1) {
+    if (cover[i] === 0) {
+      if (runStart < 0) runStart = i;
+      const len = i - runStart + 1;
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = runStart;
+      }
+    } else {
+      runStart = -1;
+    }
+  }
+  // 空白带太窄（< 页宽的 3%）认为不是分栏
+  if (bestStart < 0 || bestLen < 3) return [items];
+
+  const splitX = minX + ((bestStart + bestLen / 2) / BINS) * width;
+  const left = [];
+  const right = [];
+  for (const s of spans) (s.x < splitX ? left : right).push(s.item);
+
+  // 两栏都要有足够的项，否则判为误切
+  if (left.length < 10 || right.length < 10) return [items];
+  return [left, right];
 }
 
 /**

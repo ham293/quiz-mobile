@@ -143,6 +143,8 @@ export async function renderSession(root) {
   const progress = el('i');
   const selected = new Set();
   const optionNodes = new Map();
+  /** 无选项兜底时的手写答案输入框 */
+  let typedInput = null;
 
   const optionEntries = P.isSubjective(q)
     ? []
@@ -197,6 +199,31 @@ export async function renderSession(root) {
       ? optionEntries
       : (q.qtype === '判断' ? [['正确', '正确'], ['错误', '错误']] : []);
 
+    // 兜底：客观题却一个选项都没解析出来（题库排版特殊）时，
+    // 给一个手写答案输入框，绝不能让用户无题可答（以前的死路问题）
+    if (!entries.length) {
+      const input = el('input', {
+        type: 'text',
+        placeholder: '例：A（多选连写，如 ABD）',
+        style: { marginTop: '12px' },
+        onkeydown: (e) => {
+          if (e.key === 'Enter') submitTyped();
+        },
+      });
+      optionsWrap.appendChild(
+        el('div.field.mt12', {}, [
+          el('label', { text: '这道题没解析出选项，请直接输入答案' }),
+          input,
+        ]),
+      );
+      optionsWrap.appendChild(
+        el('p.tiny.muted', { text: '（常见于排版特殊的 PDF；也可以到「设置 → 手动补录」里把这题补全）' }),
+      );
+      typedInput = input;
+      renderBottomActions();
+      return;
+    }
+
     for (const [letter, text] of entries) {
       const node = el('div.option', {
         onclick: () => toggleOption(letter),
@@ -208,6 +235,23 @@ export async function renderSession(root) {
       optionsWrap.appendChild(node);
     }
     renderBottomActions();
+  }
+
+  /** 手动输入的答案提交（无选项兜底） */
+  function submitTyped() {
+    if (!typedInput || view.answered) return;
+    const raw = String(typedInput.value || '').trim();
+    if (!raw) {
+      toast('请先输入答案');
+      return;
+    }
+    selected.clear();
+    for (const ch of raw.toUpperCase()) {
+      if (raw.length === 1 && ch === 'T') selected.add('正确');
+      else if (raw.length === 1 && ch === 'F') selected.add('错误');
+      else selected.add(ch);
+    }
+    submitObjective();
   }
 
   /** 显示参考答案（主观题） */
@@ -237,6 +281,12 @@ export async function renderSession(root) {
     if (P.isSubjective(q)) {
       actions.appendChild(el('button.btn.bad.grow', { type: 'button', text: '我不会', onclick: () => submitSubjective(false) }));
       actions.appendChild(el('button.btn.ok.grow', { type: 'button', text: '我会了', onclick: () => submitSubjective(true) }));
+      return;
+    }
+    // 无选项兜底：提交按钮用输入框里的内容
+    if (typedInput) {
+      actions.appendChild(el('button.btn.primary.grow', { type: 'button', text: '提交答案', onclick: () => submitTyped() }));
+      actions.appendChild(el('button.btn', { type: 'button', text: '收藏', onclick: () => toggleFavorite() }));
       return;
     }
     // 单选/判断题点选即提交，不需要提交按钮；多选题需要手动提交

@@ -146,9 +146,11 @@ const BARE_ALIAS_ALT = ALIAS_KEYS_DESC.filter((a) => a.endsWith('题')).map(esca
 const TYPE_MARK_BARE_RE = new RegExp(`^(${BARE_ALIAS_ALT})\\s*[:：.、．]?\\s*`);
 
 // ---- 题号（新题起始）--------------------------------------------------------
-// 「1.」「1、」「1）」「1)」「1．」等阿拉伯数字编号；分隔符后不能紧跟数字，
-// 避免把「1.5倍」「2024年」这类正文当成题号
-const QNUM_ARABIC_RE = /^\s*\d{1,3}\s*[.、．)）](?!\d)\s*/;
+// 「1.」「1、」「1）」「1)」「1．」等阿拉伯数字编号。
+// 只有「小数点分隔符」后面才禁止紧跟数字（避免把「1.5倍」当成题号）；
+// 顿号/括号分隔符后面允许跟数字 —— 否则「2、1949年新中国成立…」这种
+// 题号后直接接年份的题目会被漏掉（实测用户题库里就有）。
+const QNUM_ARABIC_RE = /^\s*\d{1,3}\s*(?:[、)）]\s*|[.．](?!\d)\s*)/;
 /** 「(1)」「（1）」 */
 const QNUM_PAREN_RE = /^\s*[(（]\s*\d{1,3}\s*[)）]\s*/;
 /** 「第1题」「第 1 题」 */
@@ -201,6 +203,11 @@ const PAGE_NUMBER_DECOR_RE = /^\s*[-—–]\s*\d{1,4}\s*[-—–]\s*$/;
 const PAGE_NUMBER_RE = /^[\s\-—–_=*·.]*(?:第?\s*\d{1,4}\s*(?:页|\/[0-9]{1,4})?)[\s\-—–_=*·.]*$/;
 /** 页码的完整形态：「第 1 页 共 2 页」「第1页/共2页」 */
 const EXTRA_PAGE_RE = /^\s*第?\s*\d{1,4}\s*页\s*(?:[/共]\s*共?\s*\d{1,4}\s*页?)?\s*$/;
+/**
+ * 只有分值标注的行（考试卷常见）：「（共计280分）」「[2分]」「共20分」「本大题共30分」
+ * 这类行不是题目，之前会被当成一道题干（用户实测出现过题干为「（共计280分）」的题）。
+ */
+const SCORE_ONLY_RE = /^[（(【\[]?\s*(?:共\s*计?|总\s*计?|每题|本大题|本卷|小计)?\s*\d{1,3}\s*分\s*[）)】\]]?[。.．]?$/;
 
 // ---- 答案取值 ---------------------------------------------------------------
 // 可归一化为判断题答案的字面量（不含 1/0/Y/N 等歧义形态，避免与选项字母冲突）
@@ -953,6 +960,18 @@ function addFrags(unit, frags) {
 }
 
 /**
+ * 去掉题干开头的分值标注：`[2分] 1943年…` → `1943年…`；`（2分）题干` → `题干`。
+ * 只处理「行首且只有分值」的情况，避免误伤正文里的数字。
+ * @param {string} text
+ * @returns {string}
+ */
+function stripLeadingScore(text) {
+  return String(text || '')
+    .replace(/^\s*[[【（(]\s*(?:共\s*计?|总计?)?\s*\d{1,3}\s*分\s*[\]】）)]\s*/, '')
+    .trim();
+}
+
+/**
  * 处理「题号所在行」的剩余文本：先取答案/解析，再切同行选项，最后剩下的当题干。
  * 注意 `（ ）` 这种空答案括号不算答案：它保留在题干里、答案仍为空，
  * 由后面的「答案缺失」检查统一记 errors。
@@ -1196,6 +1215,12 @@ export function parseLines(lines, bankName = '') {
           state.noiseRemoved += 1;
           continue;
         }
+        // ---- 噪声：纯分值标注行（「（共计280分）」「[2分]」等，不是题目）----
+        if (SCORE_ONLY_RE.test(stripped)) {
+          state.skipped.push(makeSkip(page, lineNo, stripped, '分值标注'));
+          state.noiseRemoved += 1;
+          continue;
+        }
 
         if (start !== null) {
           const { kind, rest, explicit, markerOnly } = start;
@@ -1208,15 +1233,17 @@ export function parseLines(lines, bankName = '') {
             continue;
           }
           closeUnit();
-          if (markerOnly) {
-            // 「一、单项选择题」这类标题行：记为 skipped（不产生空题干噪声）
+          // 「一、单项选择题」这类标题行，以及「一、单选题（共计280分）」这种
+          // 只剩分值标注的标题行：记为 skipped，不产生空题干噪声
+          if (markerOnly || SCORE_ONLY_RE.test(String(rest || '').trim())) {
             state.skipped.push(makeSkip(page, lineNo, stripped, '题型标题行'));
             continue;
           }
           unit = new Unit(record);
           unit.addRaw(stripped);
           unit.explicitType = explicit;
-          fillStemLine(unit, rest);
+          // 题干开头的分值标注（如「1、[2分] 1943年…」）去掉
+          fillStemLine(unit, stripLeadingScore(rest));
           continue;
         }
 
