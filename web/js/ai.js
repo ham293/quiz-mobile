@@ -51,7 +51,7 @@ export const AI_SETTINGS_KEY = 'quiz.aiSettings';
 export const DEFAULT_CHUNK_CHARS = 6000;
 
 /** 单次请求超时（毫秒） */
-export const AI_TIMEOUT_MS = 60000;
+export const AI_TIMEOUT_MS = 45000;
 
 /** 分块字符数的允许范围 */
 const MIN_CHUNK_CHARS = 1000;
@@ -750,19 +750,68 @@ let capacitorHttpPromise = null;
 
 /**
  * 取 CapacitorHttp（**只做显式调用，不开全局补丁**）。
+ *
+ * 【踩坑记录】不能只写 `import('@capacitor/core')`：本项目是**没有打包器的静态网页**，
+ * 浏览器不认裸模块名 `@capacitor/core`，这个 import 必然失败 → 退回 fetch → 被 CORS 拦
+ * → 请求一直挂到超时（用户实测「第 1/6 块 …… 请求超时（超过 60 秒）」就是这个原因）。
+ * 正确姿势：Capacitor 会把运行时和已注册插件注入到 `window.Capacitor`
+ * （Android 侧 `Bridge.registerPlugin(CapacitorHttp.class)` 已确认注册），
+ * 直接从全局对象取即可；npm 包那条路只作为有打包器时的兜底。
  * @returns {Promise<any|null>}
  */
 async function loadCapacitorHttp() {
+  // ① 原生壳注入的全局对象（APK 里走这条）
+  try {
+    const cap = globalThis.Capacitor;
+    if (cap) {
+      const direct = (cap.Plugins && cap.Plugins.CapacitorHttp) || cap.CapacitorHttp;
+      if (direct && typeof direct.post === 'function') return direct;
+      // ② 运行时没预先注册时，用它的 registerPlugin 显式创建一个转发到原生的代理
+      if (typeof cap.registerPlugin === 'function') {
+        try {
+          const proxy = cap.registerPlugin('CapacitorHttp');
+          if (proxy && typeof proxy.post === 'function') return proxy;
+        } catch (err) {
+          console.warn('[ai] registerPlugin("CapacitorHttp") 失败：', err);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[ai] 读取全局 CapacitorHttp 失败：', err);
+  }
+
+  // ③ 兜底：打包环境才可能解析的 npm 包（静态页面里会失败，失败就返回 null）
   if (!isNativePlatform()) return null;
   if (!capacitorHttpPromise) {
     capacitorHttpPromise = import(/* webpackIgnore: true */ '@capacitor/core')
       .then((mod) => (mod && mod.CapacitorHttp) || null)
       .catch((err) => {
-        console.warn('[ai] 加载 @capacitor/core 失败，改用 fetch：', err);
+        console.warn('[ai] 加载 @capacitor/core 失败（静态页面里属正常），改用 fetch：', err);
         return null;
       });
   }
   return capacitorHttpPromise;
+}
+
+/**
+ * 供「机器自检」页使用：当前 AI 请求会走哪条通道、能不能用。
+ * @returns {Promise<{ok:boolean, detail:string}>}
+ */
+export async function aiNetworkDiagnostic() {
+  const native = isNativePlatform();
+  const cap = globalThis.Capacitor || null;
+  const plugin = cap && ((cap.Plugins && cap.Plugins.CapacitorHttp) || cap.CapacitorHttp);
+  const http = await loadCapacitorHttp();
+  if (http) {
+    return { ok: true, detail: `原生通道可用（CapacitorHttp${plugin ? '（全局插件）' : '（registerPlugin 代理）'}）` };
+  }
+  if (native) {
+    return {
+      ok: false,
+      detail: `原生壳里取不到 CapacitorHttp（window.Capacitor=${!!cap}），AI 请求会被跨域限制拦住`,
+    };
+  }
+  return { ok: true, detail: '浏览器环境，使用 fetch（可能受服务商 CORS 限制）' };
 }
 
 /** 超时错误（中文文案固定，UI 直接展示） */
@@ -919,6 +968,15 @@ async function sendOnce(payload, body) {
   if (signal && signal.aborted) throw new AiError('识别已取消。', 'aborted');
 
   const CapacitorHttp = await loadCapacitorHttp();
+  if (!CapacitorHttp && isNativePlatform()) {
+    // 原生壳里拿不到原生网络通道 → 退回 fetch 会被 CORS 拦成"一直超时"，
+    // 与其让用户白等，不如立刻说清楚（这条以前是静默降级，害用户等了 60 秒 × 好几块）
+    throw new AiError(
+      'APP 内的原生网络通道不可用（取不到 CapacitorHttp），直连 AI 服务商会被跨域限制拦住。' +
+        '请把这条信息发给开发者；也可以先用「导入新题库」走本地规则解析。',
+      'noplugin',
+    );
+  }
   if (CapacitorHttp) {
     let res;
     try {
@@ -1115,6 +1173,19 @@ export async function recognizeQuestions(lines, opts = {}) {
     return out;
   }
 
+  // 开跑前先探一次连通性（用很小的请求 + 短超时）：
+  // 网络不通 / Key 不对 / 模型名不存在时立刻报错，别让用户对着「第 1/6 块 超时」等下去。
+  if (opts.preflight !== false && chunks.length > 1 && typeof opts.requestFn !== 'function') {
+    report({ stage: 'preflight' });
+    const probe = await testAiConnection(settings, { timeoutMs: 20000 });
+    if (!probe.ok) {
+      out.chunks.failed = chunks.length;
+      out.errors.push(`连通性检查未通过：${probe.message}`);
+      report({ stage: 'done', index: 0, total: chunks.length, done: 0, failed: chunks.length, questions: 0 });
+      return out;
+    }
+  }
+
   if (!isAiConfigured(settings)) {
     out.errors.push('还没有配置 AI：缺少 API Key / 接口地址 / 模型名，请先到「设置 → AI 识别设置」里填写。');
     report({ stage: 'fail', index: 0, total: chunks.length, done: 0, failed: 0, questions: 0, message: out.errors[0] });
@@ -1269,6 +1340,8 @@ export async function testAiConnection(settings, opts = {}) {
       signal: opts.signal || null,
       temperature: 0,
       maxTokens: 32,
+      // 允许调用方用更短的超时（开跑前的连通性探测走 20 秒，别让用户干等）
+      timeoutMs: Number(opts.timeoutMs) > 0 ? Number(opts.timeoutMs) : AI_TIMEOUT_MS,
     });
     const response = await requestFn(payload);
     const content = extractMessageContent(response).trim();

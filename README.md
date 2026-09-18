@@ -8,11 +8,11 @@
 
 | 版本 | 说明 | 下载 |
 | --- | --- | --- |
-| `app-release.apk`（6.0 MB） | **推荐**，v1.2.1 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.1/app-release.apk) |
-| `app-debug.apk`（7.1 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.1/app-debug.apk) |
+| `app-release.apk`（6.0 MB） | **推荐**，v1.2.2 | [Release 页面](https://github.com/ham293/quiz-mobile/releases/latest) 或 [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-release.apk) |
+| `app-debug.apk`（7.1 MB） | 带调试信息，装不上时换这个试试 | [直接下载](https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-debug.apk) |
 
 > **手机网络打不开 github.com 下载链接时**（国内常见），在下载地址前面加一个加速前缀即可，例如：
-> `https://ghproxy.net/https://github.com/ham293/quiz-mobile/releases/download/v1.2.1/app-release.apk`
+> `https://ghproxy.net/https://github.com/ham293/quiz-mobile/releases/download/v1.2.2/app-release.apk`
 > （`https://ghfast.top/`、`https://gh-proxy.com/` 效果相同，哪个通用哪个）
 > 也可以去仓库的 **Actions → 最新一次运行 → Artifacts** 下载 `刷题助手-APK`。
 
@@ -48,7 +48,7 @@
 2. **等云构建**：打开仓库页面的 **Actions → 构建 APK**，约 5～10 分钟（首次会久一些）。
 3. **下载安装**：
    - 日常做法：进 **Actions** → 点最新一次运行 → 页面底部 **Artifacts** → 下载 `刷题助手-APK`（zip 里是 `app-debug.apk` / `app-release.apk`）。
-   - 更方便的做法：打 tag 并推送，工作流会把 APK 直接发布到 **Releases**（本项目已发布 v1.2.1）：
+   - 更方便的做法：打 tag 并推送，工作流会把 APK 直接发布到 **Releases**（本项目已发布 v1.2.2）：
      ```bash
      git tag v1.0.1 && git push origin v1.0.1
      ```

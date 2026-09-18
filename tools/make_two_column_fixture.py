@@ -81,12 +81,38 @@ def main() -> None:
     left_tight[13] = "3、[2分] 1919年五四运动爆发的直接原因是巴黎和会上中国外交失败，"
     _write(tight, left_tight, RIGHT_COLUMN, "挤在一起的双栏（无整页空白带）")
 
+    # 第三份：左栏若干行内部还有「大空格」（如题号与正文之间拉得很开），
+    # 这些行的最大间隙不在分栏处 —— 专门用来打"逐行最大间隙聚类"这种算法
+    noisy = ROOT / "tests" / "fixtures" / "two-column-noisy.pdf"
+    _write(
+        noisy,
+        LEFT_COLUMN,
+        RIGHT_COLUMN,
+        "双栏 + 左栏内部有大空格（干扰判定）",
+        left_splits={1: 150, 3: 170, 7: 160, 9: 175, 14: 165, 16: 150},
+    )
 
-def _write(path: Path, left: list[str], right: list[str], label: str) -> None:
+
+def _write(
+    path: Path,
+    left: list[str],
+    right: list[str],
+    label: str,
+    left_splits: dict[int, float] | None = None,
+) -> None:
+    """left_splits: {行序号: 第二段起始 x}，用来在左栏行内部制造大空格"""
+    left_splits = left_splits or {}
     c = canvas.Canvas(str(path), pagesize=A4)
     c.setFont(FONT, 10.5)
     for i, text in enumerate(left):
-        c.drawString(LEFT_X, TOP_Y - i * LINE_H, text)
+        y = TOP_Y - i * LINE_H
+        if i in left_splits:
+            # 前后两段拆开画，中间留出比栏间距更大的空隙
+            head, tail = text[:3], text[3:]
+            c.drawString(LEFT_X, y, head)
+            c.drawString(left_splits[i], y, tail)
+        else:
+            c.drawString(LEFT_X, y, text)
     # 右栏与左栏使用完全相同的 y 坐标 —— 不分栏就会串行
     for i, text in enumerate(right):
         c.drawString(RIGHT_X, TOP_Y - i * LINE_H, text)

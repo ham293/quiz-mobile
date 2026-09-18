@@ -199,7 +199,9 @@ async function onAiImport(root) {
       signal: controller ? controller.signal : null,
       onProgress: (info) => {
         if (cancelled) return;
-        if (info.stage === 'start') {
+        if (info.stage === 'preflight') {
+          showProgress('正在检查网络与 API Key（约几秒）…');
+        } else if (info.stage === 'start') {
           showProgress(`AI 识别中 第 ${info.index}/${info.total} 块…`);
         } else if (info.stage === 'retry') {
           // 把失败原因直接写出来：否则用户只看到「失败重试中」，不知道是 Key 错还是网络不通

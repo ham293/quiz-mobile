@@ -1021,8 +1021,13 @@ function splitByCoverageGap(spans, minX, width) {
 }
 
 /**
- * 方式②：逐行找横向大间隙并聚类，得到分栏线。
+ * 方式②：逐行找横向大间隙，**用投票法**确定分栏线。
  * 适用于「左栏有些行写得很长、把整页空白带截断」的双栏排版。
+ *
+ * 投票而不是"要求间隙位置很集中"：实测用户那份 PDF 里，有一部分行的最大间隙
+ * 落在左栏内部（而不是分栏处），用"离散度 < 页宽 20%"这种严格判据会直接被否掉；
+ * 改成把每行的最大间隙投到 x 轴上分箱，取票数最高且占比够高的那一箱作分栏线，
+ * 就能容忍这些离群行。
  * @param {Array<{x:number,y:number,right:number,item:object}>} spans
  * @param {number} minX
  * @param {number} width
@@ -1046,9 +1051,10 @@ function splitByLineGaps(spans, minX, width) {
     row.items.push(s);
   }
 
-  // 每行内部的最大间隙
   const gapThreshold = Math.max(8, width * 0.015);
-  const centers = [];
+  const BINS = 20;
+  const votes = new Array(BINS).fill(0);
+  const gaps = [];
   for (const row of rows) {
     const sorted = [...row.items].sort((a, b) => a.x - b.x);
     if (sorted.length < 2) continue;
@@ -1061,19 +1067,32 @@ function splitByLineGaps(spans, minX, width) {
         bestX = (sorted[i - 1].right + sorted[i].x) / 2;
       }
     }
-    if (bestGap >= gapThreshold) centers.push(bestX);
+    if (bestGap < gapThreshold) continue;
+    gaps.push(bestX);
+    const bin = Math.min(BINS - 1, Math.max(0, Math.floor(((bestX - minX) / width) * BINS)));
+    // 位置太靠边的间隙不可能是分栏线
+    const ratio = (bin + 0.5) / BINS;
+    if (ratio >= 0.25 && ratio <= 0.75) votes[bin] += 1;
   }
 
-  // 多数行都有大间隙，且这些间隙落在同一个位置附近，才认定为分栏
-  if (centers.length < Math.max(5, rows.length * 0.3)) return null;
-  centers.sort((a, b) => a - b);
-  const median = centers[Math.floor(centers.length / 2)];
-  const spread = centers[centers.length - 1] - centers[0];
-  if (spread > width * 0.2) return null;
-  const ratio = (median - minX) / width;
-  if (ratio < 0.25 || ratio > 0.75) return null;
+  if (gaps.length < 5) return null;
 
-  return cutByX(spans, median);
+  // 取票数最高的分箱（相邻箱合并，避免刚好跨箱）
+  let bestBin = -1;
+  let bestVotes = 0;
+  for (let i = 0; i < BINS; i += 1) {
+    const v = votes[i] + (votes[i - 1] || 0) + (votes[i + 1] || 0);
+    if (v > bestVotes) {
+      bestVotes = v;
+      bestBin = i;
+    }
+  }
+  if (bestBin < 0) return null;
+  // 至少要有一半的行（且不少于 5 行）支持这个位置，才算真的分栏
+  if (bestVotes < Math.max(5, rows.length * 0.5)) return null;
+
+  const splitX = minX + ((bestBin + 0.5) / BINS) * width;
+  return cutByX(spans, splitX, splitX);
 }
 
 /** 按 x 分成左右两组（两组都要有足够的项，否则视为误切） */

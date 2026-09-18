@@ -12,6 +12,7 @@ import { parseLines } from '../web/js/parser-text.js';
 
 const PDF = fileURLToPath(new URL('./fixtures/two-column.pdf', import.meta.url));
 const PDF_TIGHT = fileURLToPath(new URL('./fixtures/two-column-tight.pdf', import.meta.url));
+const PDF_NOISY = fileURLToPath(new URL('./fixtures/two-column-noisy.pdf', import.meta.url));
 const CMAPS = fileURLToPath(new URL('../web/vendor/cmaps/', import.meta.url)) + '/';
 
 async function pageItems(path = PDF) {
@@ -111,4 +112,42 @@ test('挤在一起的双栏（无整页空白带）：靠逐行间隙也能分�
   const badStem = parsed.questions.find((q) => (q.stem.match(/[A-H]\./g) || []).length >= 2);
   assert.ok(!badStem, `题干里混入多个选项标记：${badStem ? badStem.stem.slice(0, 60) : ''}`);
   assert.ok(parsed.questions.length >= 4, `应解析出至少 4 题，实际 ${parsed.questions.length}`);
+});
+
+test('干扰样本：左栏内部也有大空格时，投票仍能选中真正的分栏线', async () => {
+  const items = await pageItems(PDF_NOISY);
+
+  // 这些行内部的大间隙（题号与正文之间）比栏间距还大，是"逐行最大间隙"的陷阱
+  const naive = groupTextItemsIntoLines(items);
+  assert.ok(
+    naive.some((l) => l.includes('单选题') && l.includes('多选题')),
+    '不分栏时左右栏应当被拼在一起',
+  );
+
+  const columns = splitItemsByColumns(items);
+  assert.equal(columns.length, 2, '有内部大间隙干扰时，仍应判定为 2 栏');
+
+  const texts = columns.map((col) => groupTextItemsIntoLines(col));
+  const all = texts.flat();
+  assert.match(texts[0][0], /单选题/, `左栏首行：${texts[0][0]}`);
+  assert.match(texts[1][0], /多选题/, `右栏首行：${texts[1][0]}`);
+  assert.equal(
+    all.filter((l) => l.includes('单选题') && l.includes('多选题')).length,
+    0,
+    '分栏后不应再有左右栏合并的行',
+  );
+
+  // 切题结果：选择题必须带上选项，题干里不能混进别的题的文字
+  const lines = [];
+  for (const col of columns) {
+    groupTextItemsIntoLines(col)
+      .map((t) => t.trim())
+      .filter(Boolean)
+      .forEach((text, i) => lines.push({ page: 1, line: i + 1, para: 0, text }));
+  }
+  const parsed = parseLines(lines, '干扰样本');
+  const withOptions = parsed.questions.filter((q) => Object.keys(q.options).length >= 2);
+  assert.ok(withOptions.length >= 3, `应有选择题带上选项，实际 ${withOptions.length}`);
+  const badStem = parsed.questions.find((q) => (q.stem.match(/[A-H]\./g) || []).length >= 2);
+  assert.ok(!badStem, `题干里混入多个选项标记：${badStem ? badStem.stem.slice(0, 60) : ''}`);
 });

@@ -118,6 +118,12 @@ export async function renderSelfTest(root) {
     }
   }));
 
+  // 5b. AI 请求通道（只有配了 AI 才关心，所以标成参考项）
+  results.push(await runCheck('AI 请求通道', async () => {
+    const { aiNetworkDiagnostic } = await import('../ai.js');
+    return aiNetworkDiagnostic();
+  }, { optional: true }));
+
   // 6. 存储与数据
   results.push(await runCheck('本地存储（IndexedDB）', async () => {
     const banks = await repo.listBanks();
