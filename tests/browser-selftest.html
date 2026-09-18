@@ -251,7 +251,43 @@
         check('知识点能自动生成题目', false, String(e.message).slice(0, 100));
       }
 
-      /* 11. 数据落盘检查 */
+      /* 11. polyfill：模拟旧 WebView 缺 Promise.withResolvers */
+      try {
+        const original = Promise.withResolvers;
+        try {
+          delete Promise.withResolvers;
+          const missing = typeof Promise.withResolvers !== 'function';
+          // 用带查询串的 URL 强制重新求值 polyfills 模块
+          await import('../web/js/polyfills.js?selftest=1');
+          const fixed = typeof Promise.withResolvers === 'function';
+          const r3 = await extractLines(new File([pdfBlob], '缺API.pdf', { type: 'application/pdf' }));
+          check(
+            '缺 Promise.withResolvers 时自动补齐且仍能解析 PDF',
+            missing && fixed && r3.lines.length > 20,
+            `补齐=${fixed}，解析 ${r3.lines.length} 行`,
+          );
+        } finally {
+          if (original) Promise.withResolvers = original;
+        }
+      } catch (e) {
+        check('缺 Promise.withResolvers 时自动补齐且仍能解析 PDF', false, String(e.message).slice(0, 90));
+      }
+
+      /* 12. 机器自检页 */
+      try {
+        await app.navigate('selftest', {}, { push: false });
+        let shown = '';
+        for (let i = 0; i < 60; i += 1) {
+          await sleep(500);
+          shown = document.getElementById('screen').textContent || '';
+          if (shown.includes('UA:')) break;
+        }
+        check('机器自检页能跑完并出报告', shown.includes('✅') && shown.includes('App v'), shown.replace(/\s+/g, ' ').slice(0, 60));
+      } catch (e) {
+        check('机器自检页能跑完并出报告', false, String(e.message).slice(0, 90));
+      }
+
+      /* 13. 数据落盘检查 */
       const banks = await repo.listBanks();
       check('IndexedDB 中已保存题库', banks.length >= 1, banks.map((b) => `${b.name}(${b.questionCount})`).join(','));
       check('错题本有记录', (await repo.wrongTotal('浏览器测试题库')) >= 1);

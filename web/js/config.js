@@ -1,7 +1,7 @@
 /** 应用级常量 */
 
 export const APP_NAME = '刷题助手';
-export const APP_VERSION = '1.0.6';
+export const APP_VERSION = '1.0.7';
 
 /** 艾宾浩斯复习间隔（天） */
 export const EBBINGHAUS_INTERVALS = [0, 1, 2, 4, 7, 15, 30];

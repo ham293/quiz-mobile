@@ -1,5 +1,6 @@
 /** 题库首页：题库列表、导入、选择 */
 
+import { APP_VERSION } from '../config.js';
 import { importFile, importSamples, loadBank, navigate, state } from '../app.js';
 import * as repo from '../bank.js';
 import * as eb from '../ebbinghaus.js';
@@ -85,6 +86,14 @@ export async function renderBanks(root) {
         },
       }),
     ]),
+  );
+
+  // 版本号常驻显示：出问题时截图就能看出装的是哪一版
+  children.push(
+    el('div.center.tiny.muted.mt12', {
+      text: `刷题助手 v${APP_VERSION} · 完全离线`,
+      onclick: () => navigate('selftest'),
+    }),
   );
 
   mount(root, ...children);

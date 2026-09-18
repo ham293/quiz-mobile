@@ -2,6 +2,10 @@
  * 应用入口：路由、全局状态、题库导入流程。
  */
 
+// 必须最先执行：补齐旧 WebView 缺失的现代 API（pdf.js 依赖 Promise.withResolvers 等）
+import './polyfills.js';
+
+import { APP_NAME, APP_VERSION } from './config.js';
 import * as repo from './bank.js';
 import { extractLines } from './extract.js';
 import { parseLines } from './parser-text.js';
@@ -21,6 +25,7 @@ const ROUTES = {
   logs: { mod: () => import('./ui/settings.js'), fn: 'renderLogs', title: '解析日志', tab: 'settings' },
   manual: { mod: () => import('./ui/settings.js'), fn: 'renderManual', title: '手动补录', tab: 'settings' },
   about: { mod: () => import('./ui/settings.js'), fn: 'renderAbout', title: '关于', tab: 'settings' },
+  selftest: { mod: () => import('./ui/selftest.js'), fn: 'renderSelfTest', title: '机器自检', tab: 'settings' },
 };
 
 /** 全局状态 */
@@ -173,6 +178,7 @@ export function pickFile() {
  */
 export function showErrorDetail(title, detail) {
   const text = String(detail || '（无详细信息）');
+  const head = `App v${APP_VERSION}　（设置 → 关于 → 运行机器自检 可做完整检查）\n`;
   const body = el('div', {}, [
     el('h3.card-title', { text: title || '出错了' }),
     el('pre.pre-wrap.mono', {
@@ -185,8 +191,18 @@ export function showErrorDetail(title, detail) {
         fontSize: '12px',
         margin: '0',
       },
-      text,
+      text: head + text,
     }),
+    el('div.mt12', {}, [
+      el('button.btn.block', {
+        type: 'button',
+        text: '🔍 运行机器自检（看看设备解析链路是否正常）',
+        onclick: () => {
+          closeSheet();
+          navigate('selftest');
+        },
+      }),
+    ]),
     el('div.grid2.mt12', {}, [
       el('button.btn', { type: 'button', text: '知道了', onclick: () => closeSheet() }),
       el('button.btn.primary', {
@@ -194,7 +210,7 @@ export function showErrorDetail(title, detail) {
         text: '复制这段信息',
         onclick: async () => {
           try {
-            await navigator.clipboard.writeText(text);
+            await navigator.clipboard.writeText(head + text);
             toast('已复制，发给开发者即可定位');
           } catch {
             toast('复制失败，请长按上面的文字手动选择');

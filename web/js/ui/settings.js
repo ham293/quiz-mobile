@@ -863,18 +863,25 @@ export async function renderAbout(root, params = {}) {
       text: '遇到「导入失败 / 解析异常」时，把下面这段连同屏幕上的报错文字一起发出来，就能快速定位。',
     }),
     el('div.mono.pre-wrap.mt8', { text: diagText }),
-    el('button.btn.sm.mt12', {
-      type: 'button',
-      text: '复制诊断信息',
-      onclick: async () => {
-        try {
-          await navigator.clipboard.writeText(diagText);
-          toast('诊断信息已复制');
-        } catch {
-          toast('复制失败，请长按上面的文字手动选择');
-        }
-      },
-    }),
+    el('div.grid2.mt12', {}, [
+      el('button.btn', {
+        type: 'button',
+        text: '复制诊断信息',
+        onclick: async () => {
+          try {
+            await navigator.clipboard.writeText(diagText);
+            toast('诊断信息已复制');
+          } catch {
+            toast('复制失败，请长按上面的文字手动选择');
+          }
+        },
+      }),
+      el('button.btn.primary', {
+        type: 'button',
+        text: '运行机器自检',
+        onclick: () => navigate('selftest'),
+      }),
+    ]),
   ]);
 
   mount(
